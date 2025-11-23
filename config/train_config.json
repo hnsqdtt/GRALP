@@ -1,0 +1,37 @@
+{
+    "device":  "cuda:0",
+    "env_config":  "env_config.json",
+    "sampling":  {
+                     "batch_env":  2048,
+                     "rollout_len":  256,
+                     "reset_each_rollout": true
+                 },
+    "ppo":  {
+                "gamma":  0.99,
+                "gae_lambda":  0.95,
+                "bootstrap": true,
+                "clip_range":  0.2,
+                "lr":  0.0003,
+                "value_lr":  0.0003,
+                "entropy_coef":  0.0,
+                "value_coef":  0.5,
+                "max_grad_norm":  0.5,
+                "epochs":  1,
+                "minibatch_size":  16384,
+                "amp":  true,
+                "amp_bf16":  true,
+                "collision_done":  true,
+                "log_std_min": -1.5,
+                "log_std_max": 2.0
+            },
+    "model": {
+        "num_queries": 4,
+        "num_heads": 4
+    },
+    "run":  {
+                "total_env_steps":  80000000000,
+                "ckpt_dir":  "runs",
+                "log_interval":  20000
+            }
+}
+

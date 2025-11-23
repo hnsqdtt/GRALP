@@ -1,0 +1,34 @@
+{
+  "limits": {
+    "vx_max": 0.6,
+    "omega_max": 1.5
+  },
+
+  "sim": {
+    "dt": 0.1,
+    "safe_distance": 0.0,
+    "task_point_max_dist_m": 30.0,
+    "task_point_success_radius_m": 0.0,
+    "task_point_random_interval_max": 50
+  },
+
+  "reward": {
+    "reward_collision": 2.0,
+    "reward_progress": 0.1,
+    "reward_limits": 0.0,
+    "orientation_verify": true,
+    "reward_jerk": 1e-6,
+    "reward_jerk_omega": 1e-6,
+    "reward_time": 0.0
+  },
+
+  "obs": {
+    "ray_max_gap": 0.6,
+    "patch_meters": 10.0,
+    "blank_ratio_base": 0.0,
+    "blank_ratio_randmax": 50.0,
+    "blank_ratio_std_ratio": 0.2,
+    "narrow_passage_gaussian": true,
+    "narrow_passage_std_ratio": 0.15
+  }
+}

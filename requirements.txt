@@ -1,0 +1,10 @@
+# Minimal runtime deps for training with SimGPUEnv
+numpy>=1.21
+
+# Note: Install PyTorch separately for your CUDA/CPU setup, e.g.
+#   CPU only:
+#     pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   CUDA 11.8:
+#     pip install torch --index-url https://download.pytorch.org/whl/cu118
+#   CUDA 12.1:
+#     pip install torch --index-url https://download.pytorch.org/whl/cu121

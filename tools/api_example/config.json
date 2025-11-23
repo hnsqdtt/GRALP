@@ -1,0 +1,11 @@
+{
+  "vx_max": 1.5,
+  "vy_max": 0.0,
+  "omega_max": 2.0,
+  "dt": 0.1,
+  "num_queries": 4,
+  "num_heads": 4,
+  "patch_meters": 10.0,
+  "ray_max_gap": 0.6,
+  "ckpt_filename": "smaple.pt"
+}
