@@ -66,7 +66,7 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在完全随机化、无
 The network is CPU-friendly. Run `python3 tools/setup_api.py` to rebuild `ppo_api/`: the script copies the template, syncs key config fields (limits, timestep, FOV, attention shape), and grabs the newest checkpoint under `runs/`. Use via `from ppo_api.inference import PPOInference`; see `ppo_api/README.md` after export.
 
 ## 独立推理导出
-网络推理对 CPU 友好。运行 `python3 tools/setup_api.py` 可重建 `ppo_api/`：脚本会复制模板、同步关键配置字段（limits、时间步长、视场、注意力形状），并抓取 `runs/` 中最新的检查点。使用方式：`from ppo_api.inference import PPOInference`，更多细节见导出后的 `ppo_api/README.md`。
+网络推理对 CPU 友好。运行 `python tools/setup_api.py` 可重建 `ppo_api/`：脚本会复制模板、同步关键配置字段（limits、时间步长、视场、注意力形状），并抓取 `runs/` 中最新的检查点。使用方式：`from ppo_api.inference import PPOInference`，更多细节见导出后的 `ppo_api/README.md`。
 
 ## Repository Layout
 - `env/`
