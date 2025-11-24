@@ -119,34 +119,32 @@ def update_api_config_from_env_and_train(root: Path) -> None:
         except Exception:
             return int(default)
 
-    api_cfg["vx_max"] = fnum(limits.get("vx_max", api_cfg.get("vx_max", 1.5)), 1.5)
-    # 训练环境中仅使用 (vx, omega) 控制；vy_max 仅保留用于 API 兼容。
-    # 若 env_config 中未提供 vy_max，则与当前网络结构对齐到 0.0。
-    api_cfg["vy_max"] = fnum(limits.get("vy_max", api_cfg.get("vy_max", 0.0)), 0.0)
-    api_cfg["omega_max"] = fnum(limits.get("omega_max", api_cfg.get("omega_max", 2.0)), 2.0)
-    api_cfg["dt"] = fnum(sim.get("dt", api_cfg.get("dt", 0.1)), 0.1)
-    api_cfg["patch_meters"] = fnum(obs.get("patch_meters", api_cfg.get("patch_meters", 10.0)), 10.0)
-    api_cfg["num_queries"] = inum(model.get("num_queries", api_cfg.get("num_queries", 4)), 4)
-    api_cfg["num_heads"] = inum(model.get("num_heads", api_cfg.get("num_heads", 4)), 4)
+    sanitized_cfg = {
+        "vx_max": fnum(limits.get("vx_max", api_cfg.get("vx_max", 1.5)), 1.5),
+        # 训练环境中仅使用 (vx, omega) 控制；vy_max 仅保留用于 API 兼容。
+        # 若 env_config 中未提供 vy_max，则与当前网络结构对齐到 0.0。
+        "vy_max": fnum(limits.get("vy_max", api_cfg.get("vy_max", 0.0)), 0.0),
+        "omega_max": fnum(limits.get("omega_max", api_cfg.get("omega_max", 2.0)), 2.0),
+        "dt": fnum(sim.get("dt", api_cfg.get("dt", 0.1)), 0.1),
+        "patch_meters": fnum(obs.get("patch_meters", api_cfg.get("patch_meters", 10.0)), 10.0),
+        "num_queries": inum(model.get("num_queries", api_cfg.get("num_queries", 4)), 4),
+        "num_heads": inum(model.get("num_heads", api_cfg.get("num_heads", 4)), 4),
+    }
+
     # 额外同步 obs.ray_max_gap（决定射线数量 R 的关键参数之一），若缺失则搜索源码默认值
     if isinstance(obs.get("ray_max_gap", None), (int, float)):
-        api_cfg["ray_max_gap"] = fnum(obs.get("ray_max_gap"), api_cfg.get("ray_max_gap", 0.6))
+        sanitized_cfg["ray_max_gap"] = fnum(obs.get("ray_max_gap"), api_cfg.get("ray_max_gap", 0.6))
     else:
         fallback_gap = _scan_fallback_ray_max_gap(root)
-        api_cfg["ray_max_gap"] = fnum(api_cfg.get("ray_max_gap", fallback_gap), fallback_gap)
+        sanitized_cfg["ray_max_gap"] = fnum(api_cfg.get("ray_max_gap", fallback_gap), fallback_gap)
 
-    # Remove derived layout metadata that should not persist in config.json
-    for derived_key in (
-        "action_dim",
-        "action_axes",
-        "action_units",
-        "obs_pose_dim",
-        "obs_pose_fields",
-        "obs_requires_task_distance",
-    ):
-        api_cfg.pop(derived_key, None)
+    # ckpt_filename 默认使用 latest.pt，若模板或已有配置提供则沿用
+    ckpt_name = api_cfg.get("ckpt_filename", "latest.pt")
+    if ckpt_name is None:
+        ckpt_name = "latest.pt"
+    sanitized_cfg["ckpt_filename"] = ckpt_name
 
-    _dump_json(api_cfg_p, api_cfg)
+    _dump_json(api_cfg_p, sanitized_cfg)
 
 
 def _pick_newest(paths: list[Path]) -> Optional[Path]:

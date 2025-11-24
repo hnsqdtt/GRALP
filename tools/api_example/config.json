@@ -7,5 +7,5 @@
   "num_heads": 4,
   "patch_meters": 10.0,
   "ray_max_gap": 0.6,
-  "ckpt_filename": "smaple.pt"
+  "ckpt_filename": "latest.pt"
 }
