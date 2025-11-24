@@ -69,6 +69,15 @@ class APIConfig:
             ckpt_filename=data.get("ckpt_filename", None),
         )
 
+    def expected_rays(self) -> int:
+        """Derive ray count R from config using (2π * patch_meters) / ray_max_gap.
+
+        Returns 0 if either patch_meters or ray_max_gap is non-positive.
+        """
+        if self.patch_meters <= 0 or self.ray_max_gap <= 0:
+            return 0
+        return int(np.ceil((2.0 * np.pi * float(self.patch_meters)) / max(float(self.ray_max_gap), 1e-9)))
+
 
 def _ensure_2d_rays(rays: ArrayLike) -> np.ndarray:
     arr = np.asarray(rays, dtype=np.float32)
@@ -242,6 +251,9 @@ class PPOInference:
         self._policy: Optional[PPOPolicy] = None
         self._vec_dim: Optional[int] = None
 
+        # Expected ray count derived from config
+        self._expected_rays: int = self.cfg.expected_rays()
+
         # Limits tensor cached lazily per batch size
         self._limits_np = self._build_limits_np()
 
@@ -332,6 +344,12 @@ class PPOInference:
         """
         rays_bxR = _ensure_2d_rays(rays_m)  # [B,R]
         B, R = int(rays_bxR.shape[0]), int(rays_bxR.shape[1])
+
+        # Enforce ray length derived from config when available
+        if self._expected_rays > 0 and R != self._expected_rays:
+            raise ValueError(
+                f"rays_m length mismatch: got {R}, expected {self._expected_rays} from (2π*patch_meters)/ray_max_gap"
+            )
 
         # Strict presence checks for pose components
         if sin_ref is None or cos_ref is None:

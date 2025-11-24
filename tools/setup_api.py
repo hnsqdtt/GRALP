@@ -11,9 +11,7 @@ config/env_config.json 与 config/train_config.json 的值更新 ppo_api/config.
   - 删除已有 <root>/ppo_api 后整体拷贝 tools/api_example → <root>/ppo_api。
   - 读取 <root>/config/env_config.json 与 train_config.json。
   - 更新 <root>/ppo_api/config.json 中的：vx_max, vy_max, omega_max, dt,
-    patch_meters, ray_max_gap, num_queries, num_heads，以及
-    action_dim/action_axes/obs_pose_dim/obs_pose_fields，用于描述当前
-    网络输入/输出布局。
+    patch_meters, ray_max_gap, num_queries, num_heads。
 """
 
 from __future__ import annotations
@@ -86,22 +84,6 @@ def _scan_fallback_ray_max_gap(root: Path) -> float:
     return 0.6
 
 
-POSE_TAIL_FIELDS: list[dict[str, str]] = [
-    {"name": "sin_ref", "desc": "参考方向正弦，范围 [-1,1]"},
-    {"name": "cos_ref", "desc": "参考方向余弦，范围 [-1,1]"},
-    {"name": "prev_vx_norm", "desc": "上一时刻 vx / vx_max"},
-    {"name": "prev_omega_norm", "desc": "上一时刻 omega / omega_max"},
-    {"name": "delta_vx_norm", "desc": "Δvx / (2*vx_max)"},
-    {"name": "delta_omega_norm", "desc": "Δomega / (2*omega_max)"},
-    {"name": "task_dist_norm", "desc": "局部任务点距离 / patch_meters"},
-]
-
-ACTION_FIELDS: list[dict[str, str]] = [
-    {"name": "vx", "unit": "m/s"},
-    {"name": "omega", "unit": "rad/s"},
-]
-
-
 def update_api_config_from_env_and_train(root: Path) -> None:
     cfg_dir = root / "config"
     env_cfg_p = cfg_dir / "env_config.json"
@@ -137,36 +119,32 @@ def update_api_config_from_env_and_train(root: Path) -> None:
         except Exception:
             return int(default)
 
-    api_cfg["vx_max"] = fnum(limits.get("vx_max", api_cfg.get("vx_max", 1.5)), 1.5)
-    # 训练环境中仅使用 (vx, omega) 控制；vy_max 仅保留用于 API 兼容。
-    # 若 env_config 中未提供 vy_max，则与当前网络结构对齐到 0.0。
-    api_cfg["vy_max"] = fnum(limits.get("vy_max", api_cfg.get("vy_max", 0.0)), 0.0)
-    api_cfg["omega_max"] = fnum(limits.get("omega_max", api_cfg.get("omega_max", 2.0)), 2.0)
-    api_cfg["dt"] = fnum(sim.get("dt", api_cfg.get("dt", 0.1)), 0.1)
-    api_cfg["patch_meters"] = fnum(obs.get("patch_meters", api_cfg.get("patch_meters", 10.0)), 10.0)
-    api_cfg["num_queries"] = inum(model.get("num_queries", api_cfg.get("num_queries", 4)), 4)
-    api_cfg["num_heads"] = inum(model.get("num_heads", api_cfg.get("num_heads", 4)), 4)
+    sanitized_cfg = {
+        "vx_max": fnum(limits.get("vx_max", api_cfg.get("vx_max", 1.5)), 1.5),
+        # 训练环境中仅使用 (vx, omega) 控制；vy_max 仅保留用于 API 兼容。
+        # 若 env_config 中未提供 vy_max，则与当前网络结构对齐到 0.0。
+        "vy_max": fnum(limits.get("vy_max", api_cfg.get("vy_max", 0.0)), 0.0),
+        "omega_max": fnum(limits.get("omega_max", api_cfg.get("omega_max", 2.0)), 2.0),
+        "dt": fnum(sim.get("dt", api_cfg.get("dt", 0.1)), 0.1),
+        "patch_meters": fnum(obs.get("patch_meters", api_cfg.get("patch_meters", 10.0)), 10.0),
+        "num_queries": inum(model.get("num_queries", api_cfg.get("num_queries", 4)), 4),
+        "num_heads": inum(model.get("num_heads", api_cfg.get("num_heads", 4)), 4),
+    }
+
     # 额外同步 obs.ray_max_gap（决定射线数量 R 的关键参数之一），若缺失则搜索源码默认值
     if isinstance(obs.get("ray_max_gap", None), (int, float)):
-        api_cfg["ray_max_gap"] = fnum(obs.get("ray_max_gap"), api_cfg.get("ray_max_gap", 0.6))
+        sanitized_cfg["ray_max_gap"] = fnum(obs.get("ray_max_gap"), api_cfg.get("ray_max_gap", 0.6))
     else:
         fallback_gap = _scan_fallback_ray_max_gap(root)
-        api_cfg["ray_max_gap"] = fnum(api_cfg.get("ray_max_gap", fallback_gap), fallback_gap)
+        sanitized_cfg["ray_max_gap"] = fnum(api_cfg.get("ray_max_gap", fallback_gap), fallback_gap)
 
-    # 与当前网络模型结构保持一致的辅助字段：
-    # - 动作维度：训练侧固定为 2（vx, omega），vy 始终为 0
-    # - 姿态/历史特征尾部维度：RayEncoder 期望 7 维
-    action_dim = len(ACTION_FIELDS)
-    api_cfg["action_dim"] = action_dim
-    api_cfg["action_axes"] = [a["name"] for a in ACTION_FIELDS]
-    api_cfg["action_units"] = {a["name"]: a["unit"] for a in ACTION_FIELDS}
+    # ckpt_filename 默认使用 latest.pt，若模板或已有配置提供则沿用
+    ckpt_name = api_cfg.get("ckpt_filename", "latest.pt")
+    if ckpt_name is None:
+        ckpt_name = "latest.pt"
+    sanitized_cfg["ckpt_filename"] = ckpt_name
 
-    pose_dim = len(POSE_TAIL_FIELDS)
-    api_cfg["obs_pose_dim"] = pose_dim
-    api_cfg["obs_pose_fields"] = POSE_TAIL_FIELDS
-    api_cfg["obs_requires_task_distance"] = True
-
-    _dump_json(api_cfg_p, api_cfg)
+    _dump_json(api_cfg_p, sanitized_cfg)
 
 
 def _pick_newest(paths: list[Path]) -> Optional[Path]:
