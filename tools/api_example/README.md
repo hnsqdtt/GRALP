@@ -1,6 +1,6 @@
 # PPOInference 推理接口使用说明
 本接口封装在 `ppo_api/inference.py`，用于在不依赖可视化/训练脚本的情况下，快速独立完成“加载权重 → 读取配置 → 接收米制射线并内部归一化 → 前向推理（动作）”。
-- 接口类：`api.inference.PPOInference`
+- 接口类：`ppo_api.inference.PPOInference`
 - 默认配置：`ppo_api/config.json`（包含 `vx_max/vy_max/omega_max/patch_meters/ray_max_gap/num_queries/num_heads`、`ckpt_filename` 等关键运行参数；I/O 布局固定为 2 轴动作、7 维姿态尾部）
 - 默认权重（未显式传入 `ckpt_path` 时的解析顺序）：
   1) config.json 中的 `ckpt_filename`（可写相对/绝对路径，默认 `latest.pt`）
@@ -17,7 +17,7 @@
 ## 快速上手（Python）
 ```python
 import numpy as np
-from api.inference import PPOInference
+from ppo_api.inference import PPOInference
 
 # 1) 创建推理实例（自动加载 ppo_api/config.json 并按默认顺序解析权重；自动选 GPU/CPU）
 api = PPOInference()
