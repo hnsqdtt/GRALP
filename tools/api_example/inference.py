@@ -244,8 +244,8 @@ class PPOInference:
     ) -> None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self._config_path = config_path or os.path.join(base_dir, "config.json")
-        self._ckpt_path = ckpt_path or self._resolve_default_ckpt(base_dir)
         self.cfg = APIConfig.from_json(self._config_path)
+        self._ckpt_path = ckpt_path or self._resolve_default_ckpt(base_dir)
         self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
 
         self._policy: Optional[PPOPolicy] = None
