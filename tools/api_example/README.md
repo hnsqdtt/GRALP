@@ -97,11 +97,13 @@ api = PPOInference(
 ```
 
 ## 输入与严格校验规则
-- `rays_m`：单帧 `[R]` 或批量 `[B,R]`，单位米；需满足 `0 <= rays_m <= patch_meters`，否则报错；内部归一化到 `[0,1]`。
+- 射线数量 R：由配置自动计算 `R = ceil((2π * patch_meters) / ray_max_gap)`，即按最大间隔 `ray_max_gap` 在圆周长 `2π·patch_meters` 上均分得到的射线数；若 `patch_meters` 或 `ray_max_gap` ≤ 0 会报错。第 0 条射线需与车体朝向对齐，再按设定的均分间隔铺满圆周。
+- 射线输入 `rays_m`：单帧 `[R]` 或批量 `[B,R]`，单位米；需满足 `0 <= rays_m <= patch_meters`，否则报错；内部归一化到 `[0,1]`。
+- 姿态尾部：固定 7 维 `[sin_ref, cos_ref, prev_vx/vx_max, prev_omega/omega_max, Δvx/(2·vx_max), Δomega/(2·omega_max), task_dist/patch_meters]`。
+- 观测总维度：`R + 7`。
 - `sin_ref` / `cos_ref`：标量、形如 `[B]` 或 `[B,1]`；需在 [-1,1]，且 `sin^2 + cos^2 ≈ 1`（容差 0.05）。
 - 历史指令：需提供 legacy (`prev_cmd/prev_prev_cmd`) 或新式分量（推荐）。
 - 任务距离：`task_dist`（米）必填，范围 [0, patch_meters]。
-- 观测维度：动态依据 R；姿态尾部固定 7 维，总维度为 `R + 7`。
 
 ## 输出
 - 返回值：单帧 `[2]` 或批量 `[B,2]`，单位 SI，顺序与 `action_axes` 一致（默认 `[vx, omega]`）。

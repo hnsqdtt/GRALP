@@ -11,9 +11,7 @@ config/env_config.json 与 config/train_config.json 的值更新 ppo_api/config.
   - 删除已有 <root>/ppo_api 后整体拷贝 tools/api_example → <root>/ppo_api。
   - 读取 <root>/config/env_config.json 与 train_config.json。
   - 更新 <root>/ppo_api/config.json 中的：vx_max, vy_max, omega_max, dt,
-    patch_meters, ray_max_gap, num_queries, num_heads，以及
-    action_dim/action_axes/obs_pose_dim/obs_pose_fields，用于描述当前
-    网络输入/输出布局。
+    patch_meters, ray_max_gap, num_queries, num_heads。
 """
 
 from __future__ import annotations
@@ -86,22 +84,6 @@ def _scan_fallback_ray_max_gap(root: Path) -> float:
     return 0.6
 
 
-POSE_TAIL_FIELDS: list[dict[str, str]] = [
-    {"name": "sin_ref", "desc": "参考方向正弦，范围 [-1,1]"},
-    {"name": "cos_ref", "desc": "参考方向余弦，范围 [-1,1]"},
-    {"name": "prev_vx_norm", "desc": "上一时刻 vx / vx_max"},
-    {"name": "prev_omega_norm", "desc": "上一时刻 omega / omega_max"},
-    {"name": "delta_vx_norm", "desc": "Δvx / (2*vx_max)"},
-    {"name": "delta_omega_norm", "desc": "Δomega / (2*omega_max)"},
-    {"name": "task_dist_norm", "desc": "局部任务点距离 / patch_meters"},
-]
-
-ACTION_FIELDS: list[dict[str, str]] = [
-    {"name": "vx", "unit": "m/s"},
-    {"name": "omega", "unit": "rad/s"},
-]
-
-
 def update_api_config_from_env_and_train(root: Path) -> None:
     cfg_dir = root / "config"
     env_cfg_p = cfg_dir / "env_config.json"
@@ -153,18 +135,16 @@ def update_api_config_from_env_and_train(root: Path) -> None:
         fallback_gap = _scan_fallback_ray_max_gap(root)
         api_cfg["ray_max_gap"] = fnum(api_cfg.get("ray_max_gap", fallback_gap), fallback_gap)
 
-    # 与当前网络模型结构保持一致的辅助字段：
-    # - 动作维度：训练侧固定为 2（vx, omega），vy 始终为 0
-    # - 姿态/历史特征尾部维度：RayEncoder 期望 7 维
-    action_dim = len(ACTION_FIELDS)
-    api_cfg["action_dim"] = action_dim
-    api_cfg["action_axes"] = [a["name"] for a in ACTION_FIELDS]
-    api_cfg["action_units"] = {a["name"]: a["unit"] for a in ACTION_FIELDS}
-
-    pose_dim = len(POSE_TAIL_FIELDS)
-    api_cfg["obs_pose_dim"] = pose_dim
-    api_cfg["obs_pose_fields"] = POSE_TAIL_FIELDS
-    api_cfg["obs_requires_task_distance"] = True
+    # Remove derived layout metadata that should not persist in config.json
+    for derived_key in (
+        "action_dim",
+        "action_axes",
+        "action_units",
+        "obs_pose_dim",
+        "obs_pose_fields",
+        "obs_requires_task_distance",
+    ):
+        api_cfg.pop(derived_key, None)
 
     _dump_json(api_cfg_p, api_cfg)
 
