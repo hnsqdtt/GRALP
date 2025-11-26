@@ -4,6 +4,8 @@ GRALP trains a lightweight PPO local planner on a fully randomized, map-free GPU
 
 GRALP（Generalized-depth Ray-Attention Local Planner）在完全随机化、无地图的 GPU 环境中训练轻量级的 PPO 局部规划器。观测由向量化的广义光线/深度（离障距离）采样和运动学历史组成，动作是连续的平面速度指令。仓库还提供“一键导出”脚本，可将训练好的策略打包为独立的推理 API。
 
+![GRALP cover](assets/cover.jpg)
+
 ## Quickstart
 1) **Install dependencies**
    ```bash
@@ -107,6 +109,8 @@ The network is CPU-friendly. Run `python3 tools/setup_api.py` to rebuild `ppo_ap
 - `runs/`：默认的检查点与输出目录（运行时生成）。
 
 ## GPU Randomized Environment
+![Blank ratio distribution](assets/blank_ratio_distribution.png)
+
 - **Per-step FOV resampling**: Each GPU sub-environment redraws per-ray distances every step using an empty/obstacle mask derived from `blank_ratio_base` plus Gaussian jitter (`blank_ratio_randmax`, `blank_ratio_std_ratio`). Empty rays are filled with the full view radius while obstacle rays sample distances.
 - **Gaussian narrow passages (optional)**: When `narrow_passage_gaussian` is true, obstacle distances follow a half-Gaussian with std = `patch_meters * narrow_passage_std_ratio`, producing clustered close obstacles; otherwise distances are uniform within the view radius.
 - **Task points without global maps**: Task points are sampled within `task_point_max_dist_m` and clipped to LOS using the sampled rays; redraw cadence is controlled by `task_point_random_interval_max`.
@@ -125,6 +129,8 @@ The network is CPU-friendly. Run `python3 tools/setup_api.py` to rebuild `ppo_ap
 - 动作为 `(vx, vy, omega)`，每步按 `limits` 裁剪；若只提供两列，环境会将 `vy` 置零。
 
 ## GRALP Network (policy/value)
+![Network architecture](assets/NetworkArchitecture.png)
+
 - **RayEncoder backbone** (`rl_ppo/encoder.py`)
   - **Ray branch**: 1D depthwise-separable convolutions with GELU + squeeze-excite blocks to embed per-ray distances.
   - **Attention fusion**: Multi-query, multi-head attention over the ray features; pose/history MLP provides query bias; outputs `[B, num_queries, d_model]` plus global averages.
