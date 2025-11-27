@@ -294,7 +294,7 @@ def _export_policy_to_onnx(api_dst: Path, api_cfg: dict, train_cfg: dict, ckpt_p
             onnx_path,
             input_names=["obs", "limits"],
             output_names=["action", "mu", "log_std"],
-            dynamic_axes=dynamic_axes,
+            dynamic_shapes=dynamic_axes,
             opset_version=18,
         )
 
