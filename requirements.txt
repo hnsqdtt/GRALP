@@ -1,5 +1,7 @@
-# Minimal runtime deps for training with SimGPUEnv
+# Core runtime deps for training/inference
 numpy>=1.21
+onnx>=1.14
+onnxruntime>=1.18  # swap to onnxruntime-gpu if running ONNX export/inference on CUDA/TRT
 
 # Note: Install PyTorch separately for your CUDA/CPU setup, e.g.
 #   CPU only:
@@ -8,3 +10,7 @@ numpy>=1.21
 #     pip install torch --index-url https://download.pytorch.org/whl/cu118
 #   CUDA 12.1:
 #     pip install torch --index-url https://download.pytorch.org/whl/cu121
+
+# Optional plotting/stats utils for tools/analyze_blank_ratio.py
+# matplotlib>=3.7
+# scipy>=1.10

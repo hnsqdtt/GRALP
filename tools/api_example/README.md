@@ -1,25 +1,28 @@
 # PPOInference 推理接口使用说明
 本接口封装在 `ppo_api/inference.py`，用于在不依赖可视化/训练脚本的情况下，快速独立完成“加载权重 → 读取配置 → 接收米制射线并内部归一化 → 前向推理（动作）”。
 - 接口类：`ppo_api.inference.PPOInference`
-- 默认配置：`ppo_api/config.json`（包含 `vx_max/vy_max/omega_max/patch_meters/ray_max_gap/num_queries/num_heads`、`ckpt_filename` 等关键运行参数；I/O 布局固定为 2 轴动作、7 维姿态尾部）
-- 默认权重（未显式传入 `ckpt_path` 时的解析顺序）：
-  1) config.json 中的 `ckpt_filename`（可写相对/绝对路径，默认 `latest.pt`）
-  2) `ppo_api/latest.pt`
-  3) `ppo_api/final.pt`
+- 默认配置：`ppo_api/config.json`（包含 `vx_max/vy_max/omega_max/patch_meters/ray_max_gap/num_queries/num_heads`、`ckpt_filename`、`execution_provider` 等关键运行参数；I/O 布局固定为 2 轴动作、7 维姿态尾部）
+- 默认权重（未显式传入 `ckpt_path` 时的解析顺序，基于 ONNX 推理）：
+  1) config.json 中的 `ckpt_filename`（可写相对/绝对路径，默认 `policy.onnx`）
+  2) `ppo_api/policy.onnx`
+  3) `ppo_api/latest.onnx`
+  4) `ppo_api/final.onnx`
+- 执行设备：`execution_provider` 可填 `cpu`（默认，实测最快）、`cuda` 或 `tensorrt`（TensorRTExecutionProvider，会按可用性回落到 CUDA/CPU）。
+- ONNX 模型输出要求：优先使用 `action` 张量；若仅包含 `mu`/`log_std`，接口会按训练时的 tanh 限幅进行确定性或采样推理。
 
 ## 依赖
 - Python 3.8+
 - `numpy`
-- `torch`（需按你的 CPU/CUDA 情况安装）
-  - CPU: `pip install torch --index-url https://download.pytorch.org/whl/cpu`
-  - CUDA 12.1: `pip install torch --index-url https://download.pytorch.org/whl/cu121`
+- CPUExecutionProvider：`onnxruntime`（默认建议）
+- CUDAExecutionProvider：`onnxruntime-gpu` + 对应的 NVIDIA 驱动/CUDA（会自动回落 CPU）
+- TensorrtExecutionProvider：`onnxruntime-gpu`（带 TRT 支持）+ TensorRT 库（会自动回落 CUDA/CPU）
 
 ## 快速上手（Python）
 ```python
 import numpy as np
 from ppo_api.inference import PPOInference
 
-# 1) 创建推理实例（自动加载 ppo_api/config.json 并按默认顺序解析权重；自动选 GPU/CPU）
+# 1) 创建推理实例（自动加载 ppo_api/config.json 并按默认顺序解析权重；默认 CPUExecutionProvider，如需 CUDA/TRT 请在 config.json 设 execution_provider）
 api = PPOInference()
 
 # 2) 准备一帧射线（米制），长度 R 可变；最大值 ≤ patch_meters（内部会校验+归一化）
@@ -91,8 +94,8 @@ a_sto = api.infer(
 ```python
 api = PPOInference(
     config_path="/abs/path/to/config.json",  # 不传则用 ppo_api/config.json
-    ckpt_path="/abs/path/to/weights.pt",    # 不传则按默认顺序解析
-    device="cuda:0"                         # 或 "cpu"；不传则自动选择
+    ckpt_path="/abs/path/to/policy.onnx",   # 不传则按默认顺序解析 ONNX 权重
+    device="cuda:0"                         # 可显式覆盖为 CUDAExecutionProvider；也可在 config.json 设置 execution_provider="cuda"/"tensorrt"
 )
 ```
 
@@ -112,4 +115,3 @@ api = PPOInference(
 ## 代码位置
 - 接口类：`ppo_api/inference.py`
 - 本说明：`ppo_api/README.md`
-- 本地编码器与策略定义：`ppo_api/encoder.py`, `ppo_api/ppo_models.py`

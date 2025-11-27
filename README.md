@@ -9,12 +9,16 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在完全随机化、无
 ## Quickstart
 1) **Install dependencies**
    ```bash
-   pip install -r requirements.txt
-   # then install torch matching your device, e.g.:
+   pip install -r requirements.txt  # numpy + onnx + onnxruntime (CPU)
+   # then install torch matching your device (needed for training + setup_api export), e.g.:
    pip install torch --index-url https://download.pytorch.org/whl/cpu
    # or
    pip install torch --index-url https://download.pytorch.org/whl/cu121
+   # for GPU ONNX export/inference, swap to:
+   # pip install onnxruntime-gpu onnx
    ```
+   - `tools/setup_api.py` and `ppo_api` inference rely on `onnx` + `onnxruntime` (or `onnxruntime-gpu`).
+   - Optional: install `matplotlib` + `scipy` when running `tools/analyze_blank_ratio.py`.
 
 2) **Configure**
    - `config/env_config.json`
@@ -38,12 +42,16 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在完全随机化、无
 ## 快速开始
 1) **安装依赖**
    ```bash
-   pip install -r requirements.txt
-   # 再安装与你设备匹配的 torch，例如：
+   pip install -r requirements.txt  # 包含 numpy + onnx + onnxruntime(CPU)
+   # 再安装与你设备匹配的 torch（训练和 setup_api 导出需要），例如：
    pip install torch --index-url https://download.pytorch.org/whl/cpu
    # 或
    pip install torch --index-url https://download.pytorch.org/whl/cu121
+   # 如需 GPU ONNX 导出/推理，改为：
+   # pip install onnxruntime-gpu onnx
    ```
+   - `tools/setup_api.py` 和 `ppo_api` 推理依赖 `onnx` + `onnxruntime`（或 `onnxruntime-gpu`，用于 CUDA/TRT）。
+   - 选装：运行 `tools/analyze_blank_ratio.py` 时可安装 `matplotlib`、`scipy`。
 
 2) **配置文件**
    - `config/env_config.json`
@@ -65,10 +73,14 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在完全随机化、无
    启动时可选择创建新检查点（输入 `y`），或从 `run.ckpt_dir` 下的最新检查点恢复（输入 `n`）。
 
 ## Standalone Inference Export
-The network is CPU-friendly. Run `python3 tools/setup_api.py` to rebuild `ppo_api/`: the script copies the template, syncs key config fields (limits, timestep, FOV, attention shape), and grabs the newest checkpoint under `runs/`. Use via `from ppo_api.inference import PPOInference`; see `ppo_api/README.md` after export.
+- Requires `torch`, `onnx`, and `onnxruntime` (or `onnxruntime-gpu`). `pip install -r requirements.txt` plus the right torch wheel covers export and inference.
+- Run `python tools/setup_api.py` to rebuild `ppo_api/`: it copies `tools/api_example`, syncs limits/dt/FOV/attention fields from `config/env_config.json` and `config/train_config.json`, picks the newest `.pt` under `run.ckpt_dir` (defaults to `runs/`), exports ONNX with the derived ray count, then cleans any new `.onnx` files left in the checkpoint folder.
+- Use via `from ppo_api.inference import PPOInference`; set `execution_provider` in `ppo_api/config.json` to `cpu`/`cuda`/`tensorrt` (defaults to CPU). The generated `ppo_api/README.md` documents the validated inputs and IO layout.
 
 ## 独立推理导出
-网络推理对 CPU 友好。运行 `python tools/setup_api.py` 可重建 `ppo_api/`：脚本会复制模板、同步关键配置字段（limits、时间步长、视场、注意力形状），并抓取 `runs/` 中最新的检查点。使用方式：`from ppo_api.inference import PPOInference`，更多细节见导出后的 `ppo_api/README.md`。
+- 需要安装 `torch`、`onnx` 和 `onnxruntime`（或 `onnxruntime-gpu`）；`pip install -r requirements.txt` 加合适的 torch wheel 即可覆盖导出与推理。
+- 运行 `python tools/setup_api.py` 重建 `ppo_api/`：复制 `tools/api_example` 模板；从 `config/env_config.json` 与 `config/train_config.json` 同步 limits/dt/FOV/attention 等关键参数；在 `run.ckpt_dir`（默认 `runs/`）下选择最新的 `.pt` 权重；按推导的射线数量导出 ONNX，并清理检查点目录中新生成的 `.onnx`。
+- 使用时 `from ppo_api.inference import PPOInference`；可在 `ppo_api/config.json` 或初始化时指定 `execution_provider=cpu/cuda/tensorrt`（默认 CPU），输入/输出格式详见生成的 `ppo_api/README.md`。
 
 ## Repository Layout
 - `env/`
