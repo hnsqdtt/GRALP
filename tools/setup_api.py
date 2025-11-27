@@ -280,11 +280,8 @@ def _export_policy_to_onnx(api_dst: Path, api_cfg: dict, train_cfg: dict, ckpt_p
             pass
 
     dynamic_axes = {
-        "obs": {0: "batch"},
+        "obs_vec": {0: "batch"},
         "limits": {0: "batch"},
-        "action": {0: "batch"},
-        "mu": {0: "batch"},
-        "log_std": {0: "batch"},
     }
 
     with torch.no_grad():
