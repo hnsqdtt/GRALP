@@ -295,7 +295,7 @@ def _export_policy_to_onnx(api_dst: Path, api_cfg: dict, train_cfg: dict, ckpt_p
             input_names=["obs", "limits"],
             output_names=["action", "mu", "log_std"],
             dynamic_axes=dynamic_axes,
-            opset_version=17,
+            opset_version=18,
         )
 
     print(f"[setup_api] Exported ONNX with {rays} rays (obs_dim={obs_dim}) -> {onnx_path}")
