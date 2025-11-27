@@ -1,8 +1,8 @@
 # GRALP (Generalized-depth Ray-Attention Local Planner)
 
-GRALP trains a lightweight PPO local planner on a fully randomized, map-free GPU environment. Observations are vectorized generalized ray/depth (distance-to-obstacle) samples with kinematic history; actions are continuous planar velocity commands. The codebase also ships a one-command exporter that packages the trained policy into a standalone inference API.
+GRALP trains a lightweight PPO local planner on a **fully randomized, map-free** GPU environment. Observations are vectorized generalized ray/depth (distance-to-obstacle) samples with kinematic history; actions are continuous planar velocity commands. The codebase also ships a one-command exporter that packages the trained policy into a standalone inference API.
 
-GRALP（Generalized-depth Ray-Attention Local Planner）在完全随机化、无地图的 GPU 环境中训练轻量级的 PPO 局部规划器。观测由向量化的广义光线/深度（离障距离）采样和运动学历史组成，动作是连续的平面速度指令。仓库还提供“一键导出”脚本，可将训练好的策略打包为独立的推理 API。
+GRALP（Generalized-depth Ray-Attention Local Planner）在 **完全随机化、无地图** 的 GPU 环境中训练轻量级的 PPO 局部规划器。观测由向量化的广义光线/深度（离障距离）采样和运动学历史组成，动作是连续的平面速度指令。仓库还提供“一键导出”脚本，可将训练好的策略打包为独立的推理 API。
 
 ![GRALP cover](assets/cover.jpg)
 
@@ -73,13 +73,19 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在完全随机化、无
    启动时可选择创建新检查点（输入 `y`），或从 `run.ckpt_dir` 下的最新检查点恢复（输入 `n`）。
 
 ## Standalone Inference Export
+```bash
+python tools/setup_api.py
+```
 - Requires `torch`, `onnx`, and `onnxruntime` (or `onnxruntime-gpu`). `pip install -r requirements.txt` plus the right torch wheel covers export and inference.
-- Run `python tools/setup_api.py` to rebuild `ppo_api/`: it copies `tools/api_example`, syncs limits/dt/FOV/attention fields from `config/env_config.json` and `config/train_config.json`, picks the newest `.pt` under `run.ckpt_dir` (defaults to `runs/`), exports ONNX with the derived ray count, then cleans any new `.onnx` files left in the checkpoint folder.
+- Rebuilds `ppo_api/`: copies `tools/api_example`, syncs limits/dt/FOV/attention fields from `config/env_config.json` and `config/train_config.json`, picks the newest `.pt` under `run.ckpt_dir` (defaults to `runs/`), exports ONNX with the derived ray count, then cleans any new `.onnx` files left in the checkpoint folder.
 - Use via `from ppo_api.inference import PPOInference`; set `execution_provider` in `ppo_api/config.json` to `cpu`/`cuda`/`tensorrt` (defaults to CPU). The generated `ppo_api/README.md` documents the validated inputs and IO layout.
 
 ## 独立推理导出
+```bash
+python tools/setup_api.py
+```
 - 需要安装 `torch`、`onnx` 和 `onnxruntime`（或 `onnxruntime-gpu`）；`pip install -r requirements.txt` 加合适的 torch wheel 即可覆盖导出与推理。
-- 运行 `python tools/setup_api.py` 重建 `ppo_api/`：复制 `tools/api_example` 模板；从 `config/env_config.json` 与 `config/train_config.json` 同步 limits/dt/FOV/attention 等关键参数；在 `run.ckpt_dir`（默认 `runs/`）下选择最新的 `.pt` 权重；按推导的射线数量导出 ONNX，并清理检查点目录中新生成的 `.onnx`。
+- 重建 `ppo_api/`：复制 `tools/api_example` 模板；从 `config/env_config.json` 与 `config/train_config.json` 同步 limits/dt/FOV/attention 等关键参数；在 `run.ckpt_dir`（默认 `runs/`）下选择最新的 `.pt` 权重；按推导的射线数量导出 ONNX，并清理检查点目录中新生成的 `.onnx`。
 - 使用时 `from ppo_api.inference import PPOInference`；可在 `ppo_api/config.json` 或初始化时指定 `execution_provider=cpu/cuda/tensorrt`（默认 CPU），输入/输出格式详见生成的 `ppo_api/README.md`。
 
 ## Repository Layout
