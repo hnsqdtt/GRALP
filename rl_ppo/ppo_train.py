@@ -278,7 +278,6 @@ def main():
         global_step = _load_checkpoint(resume_ckpt, policy, opt_pi)
         print(f"[PPO] Loaded step={global_step:,}")
     log_interval = int((cfg.get("run", {}) or {}).get("log_interval", 20000))
-    last_log = max(0, global_step - log_interval) if global_step > 0 else 0
 
     total_env_steps = int(cfg["run"]["total_env_steps"])
     if bool((cfg.get("run", {}) or {}).get("resume_as_additional", False)) and global_step > 0:
@@ -295,7 +294,8 @@ def main():
 
     limits = env.get_limits()
     limits_b = limits.view(1, -1).expand(B_env, -1)
-    t0 = time.time()
+    last_log_step = global_step
+    last_log_time = time.time()
 
     while global_step < total_env_steps:
         if reset_each_rollout:
@@ -353,19 +353,13 @@ def main():
                     scaler.update()
                 else:
                     opt_pi.step()
-        if global_step - last_log >= log_interval:
-            elapsed = time.time() - t0
-            fps = global_step / max(1e-3, elapsed)
-            print(f"[PPO] step={global_step:,} | fps={fps:.1f} | BxT={B_env}x{T_roll} | epochs={epochs}")
-            try:
-                with torch.no_grad():
-                    log_std_vec = policy.log_std.clamp(policy._log_std_min, policy._log_std_max)
-                    log_std_vals = [float(x) for x in log_std_vec.detach().cpu().view(-1)]
-                print(f"[PPO] action log_std per-dim: {log_std_vals}")
-            except Exception as _e:
-                print(f"[PPO] (warn) failed to print log_std: {_e}")
+        if global_step - last_log_step >= log_interval:
+            now = time.time()
+            fps = (global_step - last_log_step) / max(1e-3, now - last_log_time)
+            print(f"[PPO] step={global_step:,} | fps={fps:.1f}")
             _save_checkpoint(run_dir, global_step, policy, opt_pi)
-            last_log = global_step
+            last_log_step = global_step
+            last_log_time = now
 
     _save_checkpoint(run_dir, global_step, policy, opt_pi)
 
