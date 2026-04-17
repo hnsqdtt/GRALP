@@ -21,17 +21,18 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在 **完全随机化、
    - Optional: install `matplotlib` + `scipy` when running `tools/analyze_blank_ratio.py`.
 
 2) **Configure**
-   - `config/env_config.json`
-     - `limits`: linear/yaw caps (`vx_max`, `omega_max`).
-     - `sim`: `dt`, `safe_distance`, task redraw knobs (`task_point_max_dist_m`, `task_point_success_radius_m`, `task_point_random_interval_max`).
-     - `obs`: view geometry (`patch_meters`, `ray_max_gap` for derived ray count) plus empty-ratio sampling controls (`blank_ratio_base`, `blank_ratio_randmax`, `blank_ratio_std_ratio`) and optional narrow-passage Gaussian distances (`narrow_passage_gaussian`, `narrow_passage_std_ratio`).
-     - `reward`: collision/progress/time/jerk weights and `orientation_verify` gate.
-   - `config/train_config.json`
-     - `device`: `cuda:0` (default) or `cpu`; `env_config` file name to load.
-     - `sampling`: `batch_env` (e.g., 2048 GPU envs), `rollout_len`, `reset_each_rollout`.
-     - `ppo`: discount (`gamma`), `gae_lambda`, clipping, optimizer lrs (`lr`, `value_lr`), `epochs`, `minibatch_size`, `entropy_coef`, `value_coef`, `max_grad_norm`, AMP toggles (`amp`, `amp_bf16`), `collision_done`, `log_std_min/max`.
-     - `model`: attention shape (`num_queries`, `num_heads`).
-     - `run`: `total_env_steps`, `ckpt_dir` (root folder that holds per-run subdirectories), `log_interval`.
+   The configs you'll actually tune live under `config/`. `train_config.json` is a standard PPO hyperparameter set (`sampling.batch_env × rollout_len` is the update batch size, `ppo.*` are the usual Adam / clip / epochs / minibatch / entropy / value knobs plus AMP toggles, `model.num_queries/num_heads` shape the attention head, `run.ckpt_dir` is the root for per-run subdirectories) — it should look familiar if you've used PPO before. The knobs that actually change *task difficulty* and *observation shape* live in `env_config.json`; the table below calls out the ones worth understanding first.
+
+   | Parameter | Section | What it controls | Notes |
+   |---|---|---|---|
+   | `patch_meters` | `obs` | View radius in meters. With `ray_max_gap` determines ray count `R = ⌈2π · patch_meters / ray_max_gap⌉`. | Changes observation dim `R + 7`; old checkpoints / ONNX are incompatible after editing. |
+   | `ray_max_gap` | `obs` | Max arc-length gap (meters) between adjacent rays at the view boundary. Smaller → more rays. | Same: changes observation dim. |
+   | `blank_ratio_base` / `blank_ratio_randmax` | `obs` | Per-env empty-ray proportion (%). Effective value is sampled from `N(base, randmax · std_ratio)` clamped to `[base, base + randmax]`. | Main obstacle-density curriculum lever; lower → denser obstacles. |
+   | `narrow_passage_gaussian` / `narrow_passage_std_ratio` | `obs` | When true, obstacle distances follow a half-Gaussian with `σ = patch_meters · std_ratio`, clustering obstacles close. Otherwise uniform within view radius. | Turn on to train for narrow-corridor traversal. |
+   | `safe_distance` | `sim` | Minimum obstacle distance required for **task-point spawn directions** (meters). | ⚠️ Does **not** affect collision detection — only filters where the goal can appear. |
+   | `task_point_max_dist_m` / `task_point_random_interval_max` | `sim` | Goal spawn radius cap, and max steps between automatic re-draws (`0` = single-goal episodes). | Effective spawn cap is `min(this, patch_meters)`. |
+   | `orientation_verify` | `reward` | When true, progress reward is positive **only if** the robot is getting closer (`Δd < 0`) **and** its heading is aligned with its velocity (`cos(heading, v) > 0`). | Off: robot may crab or reverse toward the goal; on: forces forward-oriented driving. |
+   | `reward_collision` / `reward_progress` / `reward_limits` / `reward_jerk` / `reward_jerk_omega` / `reward_time` | `reward` | Reward-shaping weights; exact forms live in `env/sim_gpu_env.py`. | Changing any of these changes the task — don't mix results across values. |
 
 3) **Train**
    ```bash
@@ -59,17 +60,18 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在 **完全随机化、
    - 选装：运行 `tools/analyze_blank_ratio.py` 时可安装 `matplotlib`、`scipy`。
 
 2) **配置文件**
-   - `config/env_config.json`
-     - `limits`：线速度/角速度上限（`vx_max`, `omega_max`）。
-     - `sim`：`dt`、安全距离与任务点重采样（`safe_distance`, `task_point_max_dist_m`, `task_point_success_radius_m`, `task_point_random_interval_max`）。
-     - `obs`：视野参数（`patch_meters`, `ray_max_gap` 用于推导射线数量），空/障比例采样控制（`blank_ratio_base`, `blank_ratio_randmax`, `blank_ratio_std_ratio`），以及可选的狭窄通道高斯距离采样（`narrow_passage_gaussian`, `narrow_passage_std_ratio`）。
-     - `reward`：碰撞/进度/时间/jerk 权重和 `orientation_verify` 开关。
-   - `config/train_config.json`
-     - `device`：默认 `cuda:0`（可设为 `cpu`）；`env_config` 指定加载的环境配置文件。
-     - `sampling`：`batch_env`（如 2048 个 GPU 环境）、`rollout_len`、`reset_each_rollout`。
-     - `ppo`：折扣系数 `gamma`、`gae_lambda`、裁剪范围、优化器学习率（`lr`, `value_lr`）、`epochs`、`minibatch_size`、`entropy_coef`、`value_coef`、`max_grad_norm`、AMP 开关（`amp`, `amp_bf16`）、`collision_done`、`log_std_min/max`。
-     - `model`：注意力形状（`num_queries`, `num_heads`）。
-     - `run`：`total_env_steps`、`ckpt_dir`（作为根目录,下面会按次生成子目录）、`log_interval`。
+   实际需要调参的两个 JSON 都在 `config/` 下。`train_config.json` 是一套标准的 PPO 超参(`sampling.batch_env × rollout_len` 为一次更新的样本量;`ppo.*` 对应 Adam 学习率/裁剪/epochs/minibatch/熵系数/价值系数和 AMP 开关;`model.num_queries` / `num_heads` 控制注意力头形状;`run.ckpt_dir` 是所有 run 子目录的根)——用过 PPO 的话里面的字段应该都不陌生。真正会影响**任务难度**和**观测形状**的旋钮集中在 `env_config.json`,表格列出最值得先理解的几个:
+
+   | 参数 | 所在节 | 作用 | 注意事项 |
+   |---|---|---|---|
+   | `patch_meters` | `obs` | 视野半径(米)。与 `ray_max_gap` 一起决定射线数 `R = ⌈2π · patch_meters / ray_max_gap⌉`。 | 改动后观测维度 `R + 7` 会变,已训好的 ckpt / ONNX 不再兼容。 |
+   | `ray_max_gap` | `obs` | 视野边界上相邻射线之间允许的最大弧长间隔(米),越小射线越密。 | 同上:会改观测维度。 |
+   | `blank_ratio_base` / `blank_ratio_randmax` | `obs` | 每个子环境的"空射线比例"(%)。实际值采样自 `N(base, randmax · std_ratio)`,再裁到 `[base, base + randmax]`。 | 控制障碍密度分布的主要 curriculum 旋钮,值越低障碍越密。 |
+   | `narrow_passage_gaussian` / `narrow_passage_std_ratio` | `obs` | 打开时,障碍距离服从半高斯 `σ = patch_meters · std_ratio`,近处障碍更集中;关闭时在视野半径内均匀采样。 | 训"窄通道穿越"类任务时建议打开。 |
+   | `safe_distance` | `sim` | 任务点生成方向所要求的**最小障碍距离**(米)。 | ⚠️ **不影响**碰撞判定,只决定目标点能出现在哪些方向上。 |
+   | `task_point_max_dist_m` / `task_point_random_interval_max` | `sim` | 任务点生成半径上限,以及自动重采样的最大步数间隔(`0` 表示单目标 episode)。 | 实际上限为 `min(此值, patch_meters)`。 |
+   | `orientation_verify` | `reward` | 打开时,progress 奖励**仅当**机器人在靠近目标(`Δd < 0`)**且**朝向与速度方向一致(`cos(heading, v) > 0`)时才能为正。 | 关闭:允许侧移/倒车拉近目标也得奖励;打开:强制"正前方"行进。 |
+   | `reward_collision` / `reward_progress` / `reward_limits` / `reward_jerk` / `reward_jerk_omega` / `reward_time` | `reward` | 奖励项权重,具体计算式见 `env/sim_gpu_env.py`。 | 改这些等于换任务,不同权重之间的结果不要混着比。 |
 
 3) **开始训练**
    ```bash
@@ -99,42 +101,56 @@ python tools/setup_api.py
 - 使用时 `from ppo_api.inference import PPOInference`；可在 `ppo_api/config.json` 或初始化时指定 `execution_provider=cpu/cuda/tensorrt`（默认 CPU），输入/输出格式详见生成的 `ppo_api/README.md`。
 
 ## Repository Layout
-- `env/`
-  - `sim_gpu_env.py`: Batched randomized ray environment (SimRandomGPUBatchEnv) with per-step FOV resampling and task-point rewards.
-  - `ray.py`: Ray count utilities used when `n_rays==0`.
-  - `utils.py`: Logging helpers and JSON config loader.
-- `rl_ppo/`
-  - `ppo_train.py`: PPO training entrypoint.
-  - `ppo_models.py`: Shared-encoder Gaussian policy and value head with tanh-squashed actions.
-  - `encoder.py`: RayEncoder backbone (ray convolutions + multi-query, multi-head attention) that outputs a 256-d latent.
-  - `ppo_buffer.py`: GAE-Lambda rollout buffer.
-  - `ppo_utils.py`: Discounted return helpers, checkpoint utilities, AMP guards, and reproducibility tools.
-- `config/`
-  - `env_config.json`: Environment, observation, and reward settings.
-  - `train_config.json`: PPO hyperparameters and run configuration.
-- `tools/`
-  - `setup_api.py`: One-command exporter that builds a self-contained `ppo_api/` with the newest checkpoint and synced configs.
-  - `api_example/`: Template for the exported inference package.
-- `runs/`: Default checkpoint/output directory (created at runtime).
+```text
+GRALP/
+├── config/
+│   ├── env_config.json          # environment / observation / reward knobs
+│   └── train_config.json        # PPO hyperparameters + run settings
+├── env/
+│   ├── sim_gpu_env.py           # batched randomized ray environment (SimRandomGPUBatchEnv)
+│   ├── ray.py                   # ray-count derivation utilities
+│   └── utils.py                 # JSON config loader + logging helpers
+├── rl_ppo/
+│   ├── ppo_train.py             # training entrypoint (CLI: --fresh / --resume)
+│   ├── ppo_models.py            # tanh-squashed Gaussian policy + value head
+│   ├── encoder.py               # RayEncoder backbone (conv + multi-query attention)
+│   ├── ppo_buffer.py            # GAE-Lambda rollout buffer
+│   └── ppo_utils.py             # checkpoint / AMP / reproducibility helpers
+├── tools/
+│   ├── setup_api.py             # one-command ONNX exporter → ppo_api/
+│   ├── analyze_blank_ratio.py   # visualize the blank_ratio sampling distribution
+│   └── api_example/             # template for the exported inference package
+├── assets/                      # figures referenced in this README
+├── runs/                        # created at training time: <timestamp>[-<tag>]/
+├── requirements.txt
+└── README.md
+```
 
 ## 目录结构
-- `env/`
-  - `sim_gpu_env.py`：批量随机化的光线环境（SimRandomGPUBatchEnv），支持每步视场重新采样和任务点奖励。
-  - `ray.py`：当 `n_rays==0` 时使用的光线数量工具函数。
-  - `utils.py`：日志工具和 JSON 配置加载器。
-- `rl_ppo/`
-  - `ppo_train.py`：PPO 训练入口。
-  - `ppo_models.py`：共享编码器的高斯策略与价值头，动作使用 `tanh` 压缩。
-  - `encoder.py`：RayEncoder 主干（光线卷积 + 多查询多头注意力），输出 256 维潜在向量。
-  - `ppo_buffer.py`：GAE-Lambda 轨迹缓冲。
-  - `ppo_utils.py`：折扣回报工具、检查点管理、AMP 保护和可复现性辅助。
-- `config/`
-  - `env_config.json`：环境、观测与奖励配置。
-  - `train_config.json`：PPO 超参数与运行配置。
-- `tools/`
-  - `setup_api.py`：一键导出脚本，使用最新检查点与配置生成独立的 `ppo_api/`。
-  - `api_example/`：导出推理包的模板。
-- `runs/`：默认的检查点与输出目录（运行时生成）。
+```text
+GRALP/
+├── config/
+│   ├── env_config.json          # 环境 / 观测 / 奖励配置
+│   └── train_config.json        # PPO 超参 + 运行配置
+├── env/
+│   ├── sim_gpu_env.py           # 批量随机化光线环境（SimRandomGPUBatchEnv）
+│   ├── ray.py                   # 射线数量推导工具
+│   └── utils.py                 # JSON 配置加载 + 日志辅助
+├── rl_ppo/
+│   ├── ppo_train.py             # 训练入口（CLI: --fresh / --resume）
+│   ├── ppo_models.py            # tanh 压缩高斯策略 + 价值头
+│   ├── encoder.py               # RayEncoder 主干（光线卷积 + 多查询注意力）
+│   ├── ppo_buffer.py            # GAE-Lambda 轨迹缓冲
+│   └── ppo_utils.py             # 检查点 / AMP / 可复现性辅助
+├── tools/
+│   ├── setup_api.py             # 一键 ONNX 导出 → ppo_api/
+│   ├── analyze_blank_ratio.py   # 可视化 blank_ratio 采样分布
+│   └── api_example/             # 导出推理包模板
+├── assets/                      # README 引用的图片
+├── runs/                        # 训练时生成：<timestamp>[-<tag>]/
+├── requirements.txt
+└── README.md
+```
 
 ## GPU Randomized Environment
 ![Blank ratio distribution](assets/blank_ratio_distribution.png)
