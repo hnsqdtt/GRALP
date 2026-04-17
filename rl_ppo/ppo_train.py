@@ -3,8 +3,12 @@ from __future__ import annotations
 """Entry point for PPO training using the randomized GPU ray environment (map-free).
 
 Usage:
-    python -m rl_ppo.ppo_train --fresh [--tag NAME] [--train_config PATH]
-    python -m rl_ppo.ppo_train --resume <run_dir-or-step-N.pt>
+    python -m rl_ppo.ppo_train --fresh [--tag NAME]
+    python -m rl_ppo.ppo_train --fresh --resume <path-or-tag> [--tag NAME] [--opt]
+    python -m rl_ppo.ppo_train --resume <path-or-tag>
+
+train_config / env_config are always read from config/ (for --fresh modes) or from
+the target run directory (for pure --resume).
 """
 
 import os
@@ -25,6 +29,7 @@ from env.sim_gpu_env import SimGPUEnvConfig, SimRandomGPUBatchEnv, infer_obs_dim
 
 DEFAULT_TRAIN_CONFIG = os.path.join("config", "train_config.json")
 _STEP_CKPT_PATTERN = re.compile(r"^step-(\d+)\.pt$")
+_RUN_DIR_PATTERN = re.compile(r"^(\d{8}-\d{6})(?:-(.+))?$")
 
 
 def load_train_config(path: Optional[str]) -> Dict[str, Any]:
@@ -100,27 +105,56 @@ def _setup_fresh_run_dir(runs_root: str, tag: Optional[str],
     return run_dir
 
 
-def _resolve_resume(path: str) -> Tuple[str, str]:
-    if os.path.isdir(path):
-        run_dir = os.path.abspath(path)
-        latest = os.path.join(run_dir, "latest.pt")
-        if os.path.isfile(latest):
-            return run_dir, latest
-        candidates = []
-        for name in os.listdir(run_dir):
-            m = _STEP_CKPT_PATTERN.match(name)
-            if m:
-                candidates.append((int(m.group(1)), os.path.join(run_dir, name)))
-        if not candidates:
-            raise FileNotFoundError(f"No latest.pt or step-<N>.pt found in {run_dir}")
-        candidates.sort(reverse=True)
-        return run_dir, candidates[0][1]
-    if os.path.isfile(path):
-        return os.path.dirname(os.path.abspath(path)), os.path.abspath(path)
-    raise FileNotFoundError(f"--resume target not found: {path}")
+def _pick_latest_ckpt(run_dir: str) -> str:
+    latest = os.path.join(run_dir, "latest.pt")
+    if os.path.isfile(latest):
+        return latest
+    candidates = []
+    for name in os.listdir(run_dir):
+        m = _STEP_CKPT_PATTERN.match(name)
+        if m:
+            candidates.append((int(m.group(1)), os.path.join(run_dir, name)))
+    if not candidates:
+        raise FileNotFoundError(f"No latest.pt or step-<N>.pt in {run_dir}")
+    candidates.sort(reverse=True)
+    return candidates[0][1]
 
 
-def _load_checkpoint(ckpt_file: str, policy: PPOPolicy, opt_pi: torch.optim.Optimizer) -> int:
+def _find_run_dir_by_tag(runs_root: str, tag: str) -> Optional[str]:
+    if not os.path.isdir(runs_root):
+        return None
+    matches = []
+    for name in os.listdir(runs_root):
+        m = _RUN_DIR_PATTERN.match(name)
+        if not m or m.group(2) != tag:
+            continue
+        full = os.path.join(runs_root, name)
+        if os.path.isdir(full):
+            matches.append(full)
+    if not matches:
+        return None
+    matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return matches[0]
+
+
+def _resolve_resume_target(value: str, runs_root: Optional[str]) -> Tuple[str, str]:
+    if os.path.isfile(value):
+        return os.path.dirname(os.path.abspath(value)), os.path.abspath(value)
+    if os.path.isdir(value):
+        run_dir = os.path.abspath(value)
+        return run_dir, _pick_latest_ckpt(run_dir)
+    if runs_root is None:
+        raise FileNotFoundError(f"--resume target {value!r} is not an existing file or directory")
+    run_dir = _find_run_dir_by_tag(runs_root, value)
+    if run_dir is None:
+        raise FileNotFoundError(
+            f"--resume target {value!r}: not a path, and no `*-{value}` folder under {runs_root}"
+        )
+    return run_dir, _pick_latest_ckpt(run_dir)
+
+
+def _load_checkpoint(ckpt_file: str, policy: PPOPolicy,
+                     opt_pi: Optional[torch.optim.Optimizer]) -> int:
     payload = torch.load(ckpt_file, map_location="cpu")
     if not isinstance(payload, dict):
         raise ValueError(f"Unexpected checkpoint format at {ckpt_file}")
@@ -134,7 +168,7 @@ def _load_checkpoint(ckpt_file: str, policy: PPOPolicy, opt_pi: torch.optim.Opti
             state = payload
     if state is not None:
         policy.load_state_dict(state, strict=False)
-    if "opt" in payload:
+    if opt_pi is not None and "opt" in payload:
         try:
             opt_pi.load_state_dict(payload["opt"])
         except Exception:
@@ -156,21 +190,21 @@ def _save_checkpoint(run_dir: str, global_step: int,
 
 def _parse_cli():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train_config", type=str, default=None,
-                        help="Path to train_config.json (only used with --fresh)")
     parser.add_argument("--fresh", action="store_true",
-                        help="Start a new run in <ckpt_dir>/<timestamp>[-<tag>]/")
+                        help="Create a new run folder under <ckpt_dir>/<timestamp>[-<tag>]/")
     parser.add_argument("--resume", type=str, default=None,
-                        help="Resume from a run directory or a specific step-<N>.pt")
+                        help="Run dir, step-<N>.pt file, or a tag (matches the latest `*-<tag>` folder by mtime)")
     parser.add_argument("--tag", type=str, default=None,
-                        help="Optional tag appended to the new run directory name")
+                        help="Name the new run folder (only valid with --fresh)")
+    parser.add_argument("--opt", action="store_true",
+                        help="Also load optimizer state on warm-start (only valid with --fresh --resume; pure --resume always loads it)")
     args = parser.parse_args()
-    if bool(args.fresh) == bool(args.resume):
-        parser.error("exactly one of --fresh or --resume is required")
-    if args.resume and args.train_config:
-        parser.error("--train_config is not accepted with --resume (config is read from the run directory)")
-    if args.resume and args.tag:
+    if not args.fresh and not args.resume:
+        parser.error("at least one of --fresh or --resume is required")
+    if args.tag and not args.fresh:
         parser.error("--tag is only valid with --fresh")
+    if args.opt and not (args.fresh and args.resume):
+        parser.error("--opt is only valid with --fresh --resume")
     return args
 
 
@@ -178,20 +212,34 @@ def main():
     args = _parse_cli()
 
     if args.fresh:
-        train_cfg_src = args.train_config or DEFAULT_TRAIN_CONFIG
-        if not os.path.isfile(train_cfg_src):
-            raise FileNotFoundError(f"train_config not found: {train_cfg_src}")
-        cfg_bootstrap = load_train_config(train_cfg_src)
-        env_cfg_src = _resolve_env_cfg_path(train_cfg_src, cfg_bootstrap)
-        if not env_cfg_src or not os.path.isfile(env_cfg_src):
-            raise FileNotFoundError(f"env_config not found: {env_cfg_src}")
-        runs_root = cfg_bootstrap["run"]["ckpt_dir"]
-        run_dir = _setup_fresh_run_dir(runs_root, args.tag, train_cfg_src, env_cfg_src)
-        print(f"[PPO] Fresh run at {run_dir}")
+        if not os.path.isfile(DEFAULT_TRAIN_CONFIG):
+            raise FileNotFoundError(f"train_config not found: {DEFAULT_TRAIN_CONFIG}")
+        external_cfg = load_train_config(DEFAULT_TRAIN_CONFIG)
+        external_env_cfg_src = _resolve_env_cfg_path(DEFAULT_TRAIN_CONFIG, external_cfg)
+        if not external_env_cfg_src or not os.path.isfile(external_env_cfg_src):
+            raise FileNotFoundError(f"env_config not found: {external_env_cfg_src}")
+        runs_root = external_cfg["run"]["ckpt_dir"]
+
         resume_ckpt: Optional[str] = None
+        if args.resume:
+            _, resume_ckpt = _resolve_resume_target(args.resume, runs_root)
+
+        run_dir = _setup_fresh_run_dir(runs_root, args.tag, DEFAULT_TRAIN_CONFIG, external_env_cfg_src)
+        if resume_ckpt:
+            print(f"[PPO] Fresh run at {run_dir} (warm-starting from {resume_ckpt})")
+        else:
+            print(f"[PPO] Fresh run at {run_dir}")
     else:
-        run_dir, resume_ckpt = _resolve_resume(args.resume)
-        print(f"[PPO] Resuming from {resume_ckpt}")
+        runs_root_for_tag: Optional[str] = None
+        if not (os.path.isfile(args.resume) or os.path.isdir(args.resume)):
+            if not os.path.isfile(DEFAULT_TRAIN_CONFIG):
+                raise FileNotFoundError(
+                    f"Cannot resolve --resume {args.resume!r} as a path; "
+                    f"tag lookup requires {DEFAULT_TRAIN_CONFIG}"
+                )
+            runs_root_for_tag = load_train_config(DEFAULT_TRAIN_CONFIG)["run"]["ckpt_dir"]
+        run_dir, resume_ckpt = _resolve_resume_target(args.resume, runs_root_for_tag)
+        print(f"[PPO] Resuming in {run_dir} from {resume_ckpt}")
 
     train_cfg_path = os.path.join(run_dir, "train_config.json")
     env_cfg_path = os.path.join(run_dir, "env_config.json")
@@ -275,8 +323,14 @@ def main():
 
     global_step = 0
     if resume_ckpt is not None:
-        global_step = _load_checkpoint(resume_ckpt, policy, opt_pi)
-        print(f"[PPO] Loaded step={global_step:,}")
+        load_opt = (not args.fresh) or args.opt
+        loaded_step = _load_checkpoint(resume_ckpt, policy, opt_pi if load_opt else None)
+        if args.fresh:
+            opt_str = "policy+opt" if args.opt else "policy only"
+            print(f"[PPO] Warm-started ({opt_str}) from src step={loaded_step:,}; counter reset to 0")
+        else:
+            global_step = loaded_step
+            print(f"[PPO] Loaded step={global_step:,}")
     log_interval = int((cfg.get("run", {}) or {}).get("log_interval", 20000))
 
     total_env_steps = int(cfg["run"]["total_env_steps"])

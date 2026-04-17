@@ -35,12 +35,14 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在 **完全随机化、
 
 3) **Train**
    ```bash
-   # start a new run — creates <ckpt_dir>/<timestamp>[-<tag>]/
-   python -m rl_ppo.ppo_train --fresh [--tag NAME] [--train_config config/train_config.json]
-   # resume — pass the run directory or a specific step-<N>.pt
-   python -m rl_ppo.ppo_train --resume runs/20260417-143022
+   # start from scratch — creates <ckpt_dir>/<timestamp>[-<tag>]/
+   python -m rl_ppo.ppo_train --fresh [--tag NAME]
+   # warm-start a new run from an existing checkpoint or tag
+   python -m rl_ppo.ppo_train --fresh --resume <path-or-tag> [--tag NAME] [--opt]
+   # continue an existing run (path to a run dir / step-<N>.pt, or a tag)
+   python -m rl_ppo.ppo_train --resume <path-or-tag>
    ```
-   Each `--fresh` creates its own subdirectory under `run.ckpt_dir` and copies `train_config.json` / `env_config.json` into it. Checkpoints are saved as `step-<N>.pt`, and `latest.pt` is overwritten on every save to point at the most recent one. `--resume` reads configs from the run directory and does not accept `--train_config` or `--tag`.
+   `--fresh` always creates a new run folder under `run.ckpt_dir` and copies `config/train_config.json` + `config/env_config.json` into it. Checkpoints are saved as `step-<N>.pt`, and `latest.pt` is overwritten on every save. `--resume` accepts a directory, a specific `step-<N>.pt`, or a **tag** — when a tag is given, the latest `*-<tag>` folder (by mtime) is selected. Pure `--resume` always loads optimizer state; `--fresh --resume` loads weights only unless `--opt` is passed. `--tag` is only valid with `--fresh` (for naming the new folder); the external `train_config.json` path is fixed at `config/train_config.json` and cannot be overridden from the CLI.
 
 ## 快速开始
 1) **安装依赖**
@@ -71,12 +73,14 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在 **完全随机化、
 
 3) **开始训练**
    ```bash
-   # 开新一次训练,自动生成 <ckpt_dir>/<时间戳>[-<tag>]/
-   python -m rl_ppo.ppo_train --fresh [--tag NAME] [--train_config config/train_config.json]
-   # 断点续训,传目录或具体的 step-<N>.pt
-   python -m rl_ppo.ppo_train --resume runs/20260417-143022
+   # 从零开始,自动生成 <ckpt_dir>/<时间戳>[-<tag>]/
+   python -m rl_ppo.ppo_train --fresh [--tag NAME]
+   # 热启动(新开目录,从已有 ckpt / tag 载入权重)
+   python -m rl_ppo.ppo_train --fresh --resume <path-or-tag> [--tag NAME] [--opt]
+   # 续训(传目录、具体的 step-<N>.pt,或一个 tag)
+   python -m rl_ppo.ppo_train --resume <path-or-tag>
    ```
-   每次 `--fresh` 会在 `run.ckpt_dir` 下创建独立子目录,并把 `train_config.json` / `env_config.json` 拷贝进去。检查点保存为 `step-<N>.pt`,同时覆盖写入 `latest.pt` 作为最新快照。`--resume` 会从该子目录读取配置,此时不再接受 `--train_config` 或 `--tag`。
+   `--fresh` 总是在 `run.ckpt_dir` 下创建新子目录,并把 `config/train_config.json` 与 `config/env_config.json` 拷贝进去。检查点保存为 `step-<N>.pt`,同时覆盖写入 `latest.pt`。`--resume` 可以接受目录、具体 `step-<N>.pt`,或者一个 **tag** —— 传 tag 时会选择 `runs/` 下最新的 `*-<tag>` 目录(按 mtime)。纯 `--resume` 默认会加载 optimizer;`--fresh --resume` 只加载权重,除非显式加 `--opt`。`--tag` 只在 `--fresh` 模式下有效(用来给新目录命名);外层 `train_config.json` 的位置固定为 `config/train_config.json`,不再通过命令行指定。
 
 ## Standalone Inference Export
 ```bash
