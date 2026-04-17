@@ -109,20 +109,14 @@ def _select_checkpoint(ckpt_dir: Path) -> Optional[Path]:
     if not ckpt_dir.exists():
         return None
 
-    def _latest_by_mtime(paths):
-        try:
-            return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
-        except Exception:
-            return list(paths)
+    def _newest(paths):
+        return sorted(paths, key=lambda p: p.stat().st_mtime, reverse=True)
 
-    latest = _latest_by_mtime(ckpt_dir.rglob("latest.pt"))
-    final = _latest_by_mtime(ckpt_dir.rglob("final.pt"))
-    others = _latest_by_mtime(p for p in ckpt_dir.rglob("*.pt") if p.name not in ("latest.pt", "final.pt"))
-
-    for group in (latest, final, others):
-        if group:
-            return group[0]
-    return None
+    latest = _newest(ckpt_dir.rglob("latest.pt"))
+    if latest:
+        return latest[0]
+    steps = _newest(ckpt_dir.rglob("step-*.pt"))
+    return steps[0] if steps else None
 
 
 def _list_onnx_files(dir_path: Path) -> Set[Path]:

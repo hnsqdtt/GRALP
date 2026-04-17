@@ -31,13 +31,16 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在 **完全随机化、
      - `sampling`: `batch_env` (e.g., 2048 GPU envs), `rollout_len`, `reset_each_rollout`.
      - `ppo`: discount (`gamma`), `gae_lambda`, clipping, optimizer lrs (`lr`, `value_lr`), `epochs`, `minibatch_size`, `entropy_coef`, `value_coef`, `max_grad_norm`, AMP toggles (`amp`, `amp_bf16`), `collision_done`, `log_std_min/max`.
      - `model`: attention shape (`num_queries`, `num_heads`).
-     - `run`: `total_env_steps`, `ckpt_dir`, `log_interval`.
+     - `run`: `total_env_steps`, `ckpt_dir` (root folder that holds per-run subdirectories), `log_interval`.
 
 3) **Train**
    ```bash
-   python -m rl_ppo.ppo_train --train_config config/train_config.json
+   # start a new run — creates <ckpt_dir>/<timestamp>[-<tag>]/
+   python -m rl_ppo.ppo_train --fresh [--tag NAME] [--train_config config/train_config.json]
+   # resume — pass the run directory or a specific step-<N>.pt
+   python -m rl_ppo.ppo_train --resume runs/20260417-143022
    ```
-   On startup you can create a new checkpoint (`y`) or resume from the latest checkpoint under `run.ckpt_dir` (`n`).
+   Each `--fresh` creates its own subdirectory under `run.ckpt_dir` and copies `train_config.json` / `env_config.json` into it. Checkpoints are saved as `step-<N>.pt`, and `latest.pt` is overwritten on every save to point at the most recent one. `--resume` reads configs from the run directory and does not accept `--train_config` or `--tag`.
 
 ## 快速开始
 1) **安装依赖**
@@ -64,20 +67,23 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在 **完全随机化、
      - `sampling`：`batch_env`（如 2048 个 GPU 环境）、`rollout_len`、`reset_each_rollout`。
      - `ppo`：折扣系数 `gamma`、`gae_lambda`、裁剪范围、优化器学习率（`lr`, `value_lr`）、`epochs`、`minibatch_size`、`entropy_coef`、`value_coef`、`max_grad_norm`、AMP 开关（`amp`, `amp_bf16`）、`collision_done`、`log_std_min/max`。
      - `model`：注意力形状（`num_queries`, `num_heads`）。
-     - `run`：`total_env_steps`, `ckpt_dir`, `log_interval`。
+     - `run`：`total_env_steps`、`ckpt_dir`（作为根目录,下面会按次生成子目录）、`log_interval`。
 
 3) **开始训练**
    ```bash
-   python -m rl_ppo.ppo_train --train_config config/train_config.json
+   # 开新一次训练,自动生成 <ckpt_dir>/<时间戳>[-<tag>]/
+   python -m rl_ppo.ppo_train --fresh [--tag NAME] [--train_config config/train_config.json]
+   # 断点续训,传目录或具体的 step-<N>.pt
+   python -m rl_ppo.ppo_train --resume runs/20260417-143022
    ```
-   启动时可选择创建新检查点（输入 `y`），或从 `run.ckpt_dir` 下的最新检查点恢复（输入 `n`）。
+   每次 `--fresh` 会在 `run.ckpt_dir` 下创建独立子目录,并把 `train_config.json` / `env_config.json` 拷贝进去。检查点保存为 `step-<N>.pt`,同时覆盖写入 `latest.pt` 作为最新快照。`--resume` 会从该子目录读取配置,此时不再接受 `--train_config` 或 `--tag`。
 
 ## Standalone Inference Export
 ```bash
 python tools/setup_api.py
 ```
 - Requires `torch`, `onnx`, and `onnxruntime` (or `onnxruntime-gpu`). `pip install -r requirements.txt` plus the right torch wheel covers export and inference.
-- Rebuilds `ppo_api/`: copies `tools/api_example`, syncs limits/dt/FOV/attention fields from `config/env_config.json` and `config/train_config.json`, picks the newest `.pt` under `run.ckpt_dir` (defaults to `runs/`), exports ONNX with the derived ray count, then cleans any new `.onnx` files left in the checkpoint folder.
+- Rebuilds `ppo_api/`: copies `tools/api_example`, syncs limits/dt/FOV/attention fields from `config/env_config.json` and `config/train_config.json`, picks the newest `latest.pt` under `run.ckpt_dir` (falling back to the newest `step-<N>.pt`; defaults to `runs/`), exports ONNX with the derived ray count, then cleans any new `.onnx` files left in the checkpoint folder.
 - Use via `from ppo_api.inference import PPOInference`; set `execution_provider` in `ppo_api/config.json` to `cpu`/`cuda`/`tensorrt` (defaults to CPU). The generated `ppo_api/README.md` documents the validated inputs and IO layout.
 
 ## 独立推理导出
@@ -85,7 +91,7 @@ python tools/setup_api.py
 python tools/setup_api.py
 ```
 - 需要安装 `torch`、`onnx` 和 `onnxruntime`（或 `onnxruntime-gpu`）；`pip install -r requirements.txt` 加合适的 torch wheel 即可覆盖导出与推理。
-- 重建 `ppo_api/`：复制 `tools/api_example` 模板；从 `config/env_config.json` 与 `config/train_config.json` 同步 limits/dt/FOV/attention 等关键参数；在 `run.ckpt_dir`（默认 `runs/`）下选择最新的 `.pt` 权重；按推导的射线数量导出 ONNX，并清理检查点目录中新生成的 `.onnx`。
+- 重建 `ppo_api/`：复制 `tools/api_example` 模板；从 `config/env_config.json` 与 `config/train_config.json` 同步 limits/dt/FOV/attention 等关键参数；在 `run.ckpt_dir`（默认 `runs/`）下选择最新的 `latest.pt`（若没有则回退到最新的 `step-<N>.pt`）；按推导的射线数量导出 ONNX，并清理检查点目录中新生成的 `.onnx`。
 - 使用时 `from ppo_api.inference import PPOInference`；可在 `ppo_api/config.json` 或初始化时指定 `execution_provider=cpu/cuda/tensorrt`（默认 CPU），输入/输出格式详见生成的 `ppo_api/README.md`。
 
 ## Repository Layout
