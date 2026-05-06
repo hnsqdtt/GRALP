@@ -42,8 +42,9 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在 **完全随机化、
    python -m rl_ppo.ppo_train --fresh --resume <path-or-tag> [--tag NAME] [--opt]
    # continue an existing run (path to a run dir / step-<N>.pt, or a tag)
    python -m rl_ppo.ppo_train --resume <path-or-tag>
+   # any of the above accept --port to override the TensorBoard port (default 6006)
    ```
-   `--fresh` always creates a new run folder under `run.ckpt_dir` and copies `config/train_config.json` + `config/env_config.json` into it. Checkpoints are saved as `step-<N>.pt`, and `latest.pt` is overwritten on every save. `--resume` accepts a directory, a specific `step-<N>.pt`, or a **tag** — when a tag is given, the latest `*-<tag>` folder (by mtime) is selected. Pure `--resume` always loads optimizer state; `--fresh --resume` loads weights only unless `--opt` is passed. `--tag` is only valid with `--fresh` (for naming the new folder); the external `train_config.json` path is fixed at `config/train_config.json` and cannot be overridden from the CLI.
+   `--fresh` always creates a new run folder under `run.ckpt_dir` and copies `config/train_config.json` + `config/env_config.json` into it. Checkpoints are saved as `step-<N>.pt`, and `latest.pt` is overwritten on every save. `--resume` accepts a directory, a specific `step-<N>.pt`, or a **tag** — when a tag is given, the latest `*-<tag>` folder (by mtime) is selected. Pure `--resume` always loads optimizer state; `--fresh --resume` loads weights only unless `--opt` is passed. `--tag` is only valid with `--fresh` (for naming the new folder); the external `train_config.json` path is fixed at `config/train_config.json` and cannot be overridden from the CLI. A TensorBoard server is auto-started on `--port` (default 6006) with events written under the run directory; `run.log_interval` controls TB-write / console-print cadence and `run.save_interval` controls checkpoint cadence (both in env-steps).
 
 ## 快速开始
 1) **安装依赖**
@@ -81,8 +82,9 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在 **完全随机化、
    python -m rl_ppo.ppo_train --fresh --resume <path-or-tag> [--tag NAME] [--opt]
    # 续训(传目录、具体的 step-<N>.pt,或一个 tag)
    python -m rl_ppo.ppo_train --resume <path-or-tag>
+   # 上述任意命令均可附加 --port 指定 TensorBoard 端口(默认 6006)
    ```
-   `--fresh` 总是在 `run.ckpt_dir` 下创建新子目录,并把 `config/train_config.json` 与 `config/env_config.json` 拷贝进去。检查点保存为 `step-<N>.pt`,同时覆盖写入 `latest.pt`。`--resume` 可以接受目录、具体 `step-<N>.pt`,或者一个 **tag** —— 传 tag 时会选择 `runs/` 下最新的 `*-<tag>` 目录(按 mtime)。纯 `--resume` 默认会加载 optimizer;`--fresh --resume` 只加载权重,除非显式加 `--opt`。`--tag` 只在 `--fresh` 模式下有效(用来给新目录命名);外层 `train_config.json` 的位置固定为 `config/train_config.json`,不再通过命令行指定。
+   `--fresh` 总是在 `run.ckpt_dir` 下创建新子目录,并把 `config/train_config.json` 与 `config/env_config.json` 拷贝进去。检查点保存为 `step-<N>.pt`,同时覆盖写入 `latest.pt`。`--resume` 可以接受目录、具体 `step-<N>.pt`,或者一个 **tag** —— 传 tag 时会选择 `runs/` 下最新的 `*-<tag>` 目录(按 mtime)。纯 `--resume` 默认会加载 optimizer;`--fresh --resume` 只加载权重,除非显式加 `--opt`。`--tag` 只在 `--fresh` 模式下有效(用来给新目录命名);外层 `train_config.json` 的位置固定为 `config/train_config.json`,不再通过命令行指定。训练启动时会在 `--port`(默认 6006)上自动拉起 TensorBoard 服务,events 写入对应 run 目录;`run.log_interval` 控制 TB 写入与控制台打印节奏,`run.save_interval` 控制检查点节奏(均以 env-step 为单位)。
 
 ## Standalone Inference Export
 ```bash
@@ -111,11 +113,12 @@ GRALP/
 │   ├── ray.py                   # ray-count derivation utilities
 │   └── utils.py                 # JSON config loader + logging helpers
 ├── rl_ppo/
-│   ├── ppo_train.py             # training entrypoint (CLI: --fresh / --resume)
+│   ├── ppo_train.py             # training entrypoint (CLI: --fresh / --resume / --port)
 │   ├── ppo_models.py            # tanh-squashed Gaussian policy + value head
 │   ├── encoder.py               # RayEncoder backbone (conv + multi-query attention)
 │   ├── ppo_buffer.py            # GAE-Lambda rollout buffer
-│   └── ppo_utils.py             # checkpoint / AMP / reproducibility helpers
+│   ├── ppo_utils.py             # checkpoint / AMP / reproducibility helpers
+│   └── writer.py                # TensorBoard scalar logger + autostart server
 ├── tools/
 │   ├── setup_api.py             # one-command ONNX exporter → ppo_api/
 │   ├── analyze_blank_ratio.py   # visualize the blank_ratio sampling distribution
@@ -137,11 +140,12 @@ GRALP/
 │   ├── ray.py                   # 射线数量推导工具
 │   └── utils.py                 # JSON 配置加载 + 日志辅助
 ├── rl_ppo/
-│   ├── ppo_train.py             # 训练入口（CLI: --fresh / --resume）
+│   ├── ppo_train.py             # 训练入口（CLI: --fresh / --resume / --port）
 │   ├── ppo_models.py            # tanh 压缩高斯策略 + 价值头
 │   ├── encoder.py               # RayEncoder 主干（光线卷积 + 多查询注意力）
 │   ├── ppo_buffer.py            # GAE-Lambda 轨迹缓冲
-│   └── ppo_utils.py             # 检查点 / AMP / 可复现性辅助
+│   ├── ppo_utils.py             # 检查点 / AMP / 可复现性辅助
+│   └── writer.py                # TensorBoard 标量记录器 + 自启动服务
 ├── tools/
 │   ├── setup_api.py             # 一键 ONNX 导出 → ppo_api/
 │   ├── analyze_blank_ratio.py   # 可视化 blank_ratio 采样分布
