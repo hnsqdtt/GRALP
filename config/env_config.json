@@ -15,11 +15,9 @@
   "reward": {
     "reward_collision": 2.0,
     "reward_progress": 0.1,
-    "reward_limits": 0.0,
     "orientation_verify": true,
     "reward_jerk": 1e-6,
-    "reward_jerk_omega": 1e-6,
-    "reward_time": 0.0
+    "reward_jerk_omega": 1e-6
   },
 
   "obs": {

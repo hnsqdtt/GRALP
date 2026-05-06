@@ -23,6 +23,7 @@ import torch
 
 from .ppo_models import PPOPolicy
 from .ppo_buffer import RolloutBuffer
+from .writer import close_writer, get_writer, init_writer
 from env import load_json_config
 from env.sim_gpu_env import SimGPUEnvConfig, SimRandomGPUBatchEnv, infer_obs_dim as _infer_obs_dim_sim
 
@@ -36,7 +37,6 @@ def load_train_config(path: Optional[str]) -> Dict[str, Any]:
     cfg = load_json_config(path) if path else {}
     cfg.setdefault("device", "cuda:0")
     cfg.setdefault("env_config", "env_config.json")
-    cfg.setdefault("mission_config", None)
     samp = cfg.setdefault("sampling", {})
     samp.setdefault("batch_env", 256)
     samp.setdefault("rollout_len", 128)
@@ -66,7 +66,8 @@ def load_train_config(path: Optional[str]) -> Dict[str, Any]:
     run.setdefault("total_env_steps", 2_000_000)
     run.setdefault("ckpt_dir", "runs")
     run.setdefault("log_interval", 20000)
-    run.setdefault("eval_every", 100000)
+    run.setdefault("save_interval", 200000)
+    run.setdefault("resume_as_additional", False)
     return cfg
 
 
@@ -198,6 +199,8 @@ def _parse_cli():
                         help="Name the new run folder (only valid with --fresh)")
     parser.add_argument("--opt", action="store_true",
                         help="Also load optimizer state on warm-start (only valid with --fresh --resume; pure --resume always loads it)")
+    parser.add_argument("--port", type=int, default=6006,
+                        help="TensorBoard server port (default: 6006)")
     args = parser.parse_args()
     if not args.fresh and not args.resume:
         parser.error("at least one of --fresh or --resume is required")
@@ -279,11 +282,9 @@ def main():
         omega_max=float(lim_cfg.get("omega_max", 2.0)),
         w_collision=float(rew_cfg.get("reward_collision", 1.0)),
         w_progress=float(rew_cfg.get("reward_progress", 0.01)),
-        w_limits=float(rew_cfg.get("reward_limits", 0.1)),
         orientation_verify=bool(rew_cfg.get("orientation_verify", False)),
         w_jerk=float(rew_cfg.get("reward_jerk", 0.0)),
         w_jerk_omega=float(rew_cfg.get("reward_jerk_omega", 0.0)),
-        reward_time=float(rew_cfg.get("reward_time", 0.0)),
         blank_ratio_base=float((obs_cfg.get("blank_ratio_base", 40.0))),
         blank_ratio_randmax=float((obs_cfg.get("blank_ratio_randmax", 40.0))),
         blank_ratio_std_ratio=float(obs_cfg.get("blank_ratio_std_ratio", 0.33)),
@@ -332,6 +333,7 @@ def main():
             global_step = loaded_step
             print(f"[PPO] Loaded step={global_step:,}")
     log_interval = int((cfg.get("run", {}) or {}).get("log_interval", 20000))
+    save_interval = int((cfg.get("run", {}) or {}).get("save_interval", 200000))
 
     total_env_steps = int(cfg["run"]["total_env_steps"])
     if bool((cfg.get("run", {}) or {}).get("resume_as_additional", False)) and global_step > 0:
@@ -348,8 +350,22 @@ def main():
 
     limits = env.get_limits()
     limits_b = limits.view(1, -1).expand(B_env, -1)
+
+    init_writer(
+        logdir=cfg["run"]["ckpt_dir"],
+        name=os.path.basename(os.path.normpath(run_dir)),
+        port=args.port,
+        log="training",
+    )
+    writer = get_writer()
+
+    roll_reward = torch.zeros((), device=device)
+    roll_collide = torch.zeros((), device=device)
+    roll_steps_total = 0
+
     last_log_step = global_step
     last_log_time = time.time()
+    last_save_step = global_step
 
     while global_step < total_env_steps:
         if reset_each_rollout:
@@ -372,6 +388,10 @@ def main():
                     val=v.detach(),
                     limits=limits_b.detach(),
                 )
+
+                roll_reward += reward_t.sum()
+                roll_collide += info["collided"].to(torch.float32).sum()
+                roll_steps_total += B_env
 
                 global_step += B_env
                 obs = next_obs
@@ -410,12 +430,25 @@ def main():
         if global_step - last_log_step >= log_interval:
             now = time.time()
             fps = (global_step - last_log_step) / max(1e-3, now - last_log_time)
+            n_steps = max(1, roll_steps_total)
+            if writer is not None:
+                writer.log({"mean_reward": (roll_reward / n_steps).item()},
+                           step=global_step, scope="learner")
+                writer.log({"collision_rate": (roll_collide / n_steps).item()},
+                           step=global_step, scope="rollout")
             print(f"[PPO] step={global_step:,} | fps={fps:.1f}")
-            _save_checkpoint(run_dir, global_step, policy, opt_pi)
+            roll_reward.zero_()
+            roll_collide.zero_()
+            roll_steps_total = 0
             last_log_step = global_step
             last_log_time = now
 
+        if global_step - last_save_step >= save_interval:
+            _save_checkpoint(run_dir, global_step, policy, opt_pi)
+            last_save_step = global_step
+
     _save_checkpoint(run_dir, global_step, policy, opt_pi)
+    close_writer()
 
 
 if __name__ == "__main__":

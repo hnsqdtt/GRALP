@@ -34,11 +34,9 @@ class SimGPUEnvConfig:
     omega_max: float = 2.0
     w_collision: float = 1.0
     w_progress: float = 0.01
-    w_limits: float = 0.1
     orientation_verify: bool = False
     w_jerk: float = 0.0
     w_jerk_omega: float = 0.0
-    reward_time: float = 0.0  # per-step deduction
     collision_done: bool = False
     blank_ratio_base: float = 40.0        # baseline empty proportion (%)
     blank_ratio_randmax: float = 40.0     # extra random added in [0, randmax] (%)
@@ -210,7 +208,6 @@ class SimRandomGPUBatchEnv:
         denom_progress = vx_max * dt
         jerk_x = (vx_cmd - 2.0 * self.prev_cmd[:, 0] + self.prev_prev_cmd[:, 0]) / vx_max
         jerk_omega = (om_cmd - 2.0 * self.prev_cmd[:, 2] + self.prev_prev_cmd[:, 2]) / om_max
-        limit_hit = (vx_cmd.abs() >= vx_max - 1e-9) | (om_cmd.abs() >= om_max - 1e-9)
 
         min_ray_dist_m = self._rays_m.min(dim=-1).values
         task_resampled = torch.zeros((self.B,), dtype=torch.bool, device=self.device)
@@ -246,8 +243,6 @@ class SimRandomGPUBatchEnv:
             - self.cfg.w_collision * (v_ratio * collided.to(torch.float32))
             - self.cfg.w_jerk * jerk_norm
             - self.cfg.w_jerk_omega * jerk_omega_norm
-            - self.cfg.w_limits * limit_hit.to(torch.float32)
-            - float(getattr(self.cfg, "reward_time", 0.0))
         ).to(torch.float32)
         self.prev_prev_cmd.copy_(self.prev_cmd)
         zero_hist = torch.zeros_like(vx_cmd)

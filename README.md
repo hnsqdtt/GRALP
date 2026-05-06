@@ -32,7 +32,7 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在 **完全随机化、
    | `safe_distance` | `sim` | Minimum obstacle distance required for **task-point spawn directions** (meters). | ⚠️ Does **not** affect collision detection — only filters where the goal can appear. |
    | `task_point_max_dist_m` / `task_point_random_interval_max` | `sim` | Goal spawn radius cap, and max steps between automatic re-draws (`0` = single-goal episodes). | Effective spawn cap is `min(this, patch_meters)`. |
    | `orientation_verify` | `reward` | When true, progress reward is positive **only if** the robot is getting closer (`Δd < 0`) **and** its heading is aligned with its velocity (`cos(heading, v) > 0`). | Off: robot may crab or reverse toward the goal; on: forces forward-oriented driving. |
-   | `reward_collision` / `reward_progress` / `reward_limits` / `reward_jerk` / `reward_jerk_omega` / `reward_time` | `reward` | Reward-shaping weights; exact forms live in `env/sim_gpu_env.py`. | Changing any of these changes the task — don't mix results across values. |
+   | `reward_collision` / `reward_progress` / `reward_jerk` / `reward_jerk_omega` | `reward` | Reward-shaping weights; exact forms live in `env/sim_gpu_env.py`. | Changing any of these changes the task — don't mix results across values. |
 
 3) **Train**
    ```bash
@@ -71,7 +71,7 @@ GRALP（Generalized-depth Ray-Attention Local Planner）在 **完全随机化、
    | `safe_distance` | `sim` | 任务点生成方向所要求的**最小障碍距离**(米)。 | ⚠️ **不影响**碰撞判定,只决定目标点能出现在哪些方向上。 |
    | `task_point_max_dist_m` / `task_point_random_interval_max` | `sim` | 任务点生成半径上限,以及自动重采样的最大步数间隔(`0` 表示单目标 episode)。 | 实际上限为 `min(此值, patch_meters)`。 |
    | `orientation_verify` | `reward` | 打开时,progress 奖励**仅当**机器人在靠近目标(`Δd < 0`)**且**朝向与速度方向一致(`cos(heading, v) > 0`)时才能为正。 | 关闭:允许侧移/倒车拉近目标也得奖励;打开:强制"正前方"行进。 |
-   | `reward_collision` / `reward_progress` / `reward_limits` / `reward_jerk` / `reward_jerk_omega` / `reward_time` | `reward` | 奖励项权重,具体计算式见 `env/sim_gpu_env.py`。 | 改这些等于换任务,不同权重之间的结果不要混着比。 |
+   | `reward_collision` / `reward_progress` / `reward_jerk` / `reward_jerk_omega` | `reward` | 奖励项权重,具体计算式见 `env/sim_gpu_env.py`。 | 改这些等于换任务,不同权重之间的结果不要混着比。 |
 
 3) **开始训练**
    ```bash
@@ -197,11 +197,11 @@ GRALP/
 ## Reward Highlights (SimRandomGPUBatchEnv)
 - Progress toward the task point: `-Δd / (vx_max · dt)`, optionally gated by `orientation_verify`.
 - Collision penalty: `- w_collision * (1 + |v_world| / vx_max)` when the traveled path exceeds the available ray distance (>0).
-- Jerk penalties on `vx` and `omega`, saturation penalty `w_limits`, and time penalty `reward_time` per step.
+- Jerk penalties on `vx` and `omega`.
 - `collision_done` (default true) resets only the collided sub-env; there is no timeout termination.
 
 ## 奖励要点（SimRandomGPUBatchEnv）
 - 朝任务点的进度奖励：`-Δd / (vx_max · dt)`，可选由 `orientation_verify` 控制。
 - 碰撞惩罚：当行进路径超过剩余可用光线距离（>0）时，惩罚 `- w_collision * (1 + |v_world| / vx_max)`。
-- 对 `vx` 和 `omega` 的加加速度（jerk）惩罚，动作饱和惩罚 `w_limits`，以及每步的时间惩罚 `reward_time`。
+- 对 `vx` 和 `omega` 的加加速度（jerk）惩罚。
 - `collision_done`（默认 true）仅重置发生碰撞的子环境，没有超时终止。

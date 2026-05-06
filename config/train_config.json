@@ -31,7 +31,8 @@
     "run":  {
                 "total_env_steps":  80000000000,
                 "ckpt_dir":  "runs",
-                "log_interval":  20000
+                "log_interval":  20000,
+                "save_interval":  200000
             }
 }
 
