@@ -1,0 +1,24 @@
+# Python bytecode caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Native build artifacts (DWA shared library, MSVC / GCC intermediates)
+*.o
+*.obj
+*.a
+*.lib
+*.exp
+*.so
+*.dylib
+*.dll
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
