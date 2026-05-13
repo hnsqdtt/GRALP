@@ -76,7 +76,7 @@ def _scan_fallback_ray_max_gap(root: Path) -> float:
     except Exception:
         pass
     try:
-        ppo_train_py = root / "rl_ppo" / "ppo_train.py"
+        ppo_train_py = root / "rl_ppo" / "train.py"
         if ppo_train_py.exists():
             text = ppo_train_py.read_text(encoding="utf-8", errors="ignore")
             m = re.search(r"ray_max_gap'\s*,\s*([0-9]*\.?[0-9]+)\)\)", text)
@@ -138,7 +138,8 @@ def _clean_new_onnx_in_ckpt_dir(ckpt_dir: Path, before: Set[Path]) -> None:
             print(f"[setup_api] Warning: failed to remove new ONNX file {p}: {exc}")
 
 
-def update_api_config_from_env_and_train(root: Path, env_cfg: dict, train_cfg: dict) -> dict:
+def update_api_config_from_env_and_train(root: Path, env_cfg: dict, train_cfg: dict,
+                                         model_configs: dict) -> dict:
     api_cfg_p = root / "ppo_api" / "config.json"
 
     if not api_cfg_p.exists():
@@ -149,7 +150,9 @@ def update_api_config_from_env_and_train(root: Path, env_cfg: dict, train_cfg: d
     limits = (env_cfg.get("limits") or {})
     sim = (env_cfg.get("sim") or {})
     obs = (env_cfg.get("obs") or {})
-    model = (train_cfg.get("model") or {})
+    model_key = str(train_cfg.get("model", "gralp_attn"))
+    model_entry = (model_configs.get(model_key) or {}) if isinstance(model_configs, dict) else {}
+    model_params = (model_entry.get("params") or {}) if isinstance(model_entry, dict) else {}
 
     def fnum(v, default):
         try:
@@ -169,8 +172,9 @@ def update_api_config_from_env_and_train(root: Path, env_cfg: dict, train_cfg: d
         "omega_max": fnum(limits.get("omega_max", api_cfg.get("omega_max", 2.0)), 2.0),
         "dt": fnum(sim.get("dt", api_cfg.get("dt", 0.1)), 0.1),
         "patch_meters": fnum(obs.get("patch_meters", api_cfg.get("patch_meters", 10.0)), 10.0),
-        "num_queries": inum(model.get("num_queries", api_cfg.get("num_queries", 4)), 4),
-        "num_heads": inum(model.get("num_heads", api_cfg.get("num_heads", 4)), 4),
+        "model": model_key,
+        "num_queries": inum(model_params.get("num_queries", api_cfg.get("num_queries", 4)), 4),
+        "num_heads": inum(model_params.get("num_heads", api_cfg.get("num_heads", 4)), 4),
     }
 
     if isinstance(obs.get("ray_max_gap", None), (int, float)):
@@ -214,27 +218,26 @@ def _load_policy_state_dict(ckpt_path: Path):
     raise ValueError(f"Unrecognized checkpoint format at {ckpt_path}")
 
 
-def _export_policy_to_onnx(api_dst: Path, api_cfg: dict, train_cfg: dict, ckpt_path: Path) -> Path:
+def _export_policy_to_onnx(api_dst: Path, api_cfg: dict, train_cfg: dict,
+                           model_configs: dict, ckpt_path: Path) -> Path:
     try:
         import torch
     except ImportError as exc:
         raise RuntimeError("PyTorch is required to export ONNX.") from exc
 
-    from rl_ppo.ppo_models import PPOPolicy
+    from models import PPOPolicy, build_encoder, resolve_model_entry
 
     rays, obs_dim = _derive_ray_and_obs_dim(api_cfg)
-    model_cfg = (train_cfg.get("model") or {})
     ppo_cfg = (train_cfg.get("ppo") or {})
-    num_queries = int(model_cfg.get("num_queries", api_cfg.get("num_queries", 4)))
-    num_heads = int(model_cfg.get("num_heads", api_cfg.get("num_heads", 4)))
     log_std_min = float(ppo_cfg.get("log_std_min", -5.0))
     log_std_max = float(ppo_cfg.get("log_std_max", 2.0))
 
+    model_key = str(train_cfg.get("model", "gralp_attn"))
+    model_entry = resolve_model_entry(model_configs, model_key)
+    encoder = build_encoder(model_entry, vec_dim=obs_dim)
     policy = PPOPolicy(
-        vec_dim=obs_dim,
+        encoder=encoder,
         action_dim=2,
-        num_queries=num_queries,
-        num_heads=num_heads,
         log_std_min=log_std_min,
         log_std_max=log_std_max,
     )
@@ -302,28 +305,40 @@ def main(argv: list[str]) -> int:
 
     env_cfg_p = root / "config" / "env_config.json"
     train_cfg_p = root / "config" / "train_config.json"
-    if not env_cfg_p.exists():
-        raise FileNotFoundError(f"Not found: {env_cfg_p}")
-    if not train_cfg_p.exists():
-        raise FileNotFoundError(f"Not found: {train_cfg_p}")
+    model_cfg_p = root / "config" / "model_config.json"
+    for p in (env_cfg_p, train_cfg_p, model_cfg_p):
+        if not p.exists():
+            raise FileNotFoundError(f"Not found: {p}")
 
-    env_cfg = _load_json(env_cfg_p)
-    train_cfg = _load_json(train_cfg_p)
-
-    api_dst = copy_api_example_to_root(root)
-    print(f"[setup_api] Recreated {api_dst} from tools/api_example (old removed)")
-
-    api_cfg = update_api_config_from_env_and_train(root, env_cfg, train_cfg)
-    print(f"[setup_api] Updated {api_dst / 'config.json'} from config/env_config.json and config/train_config.json")
-
-    ckpt_dir = _resolve_ckpt_dir(root, train_cfg)
+    global_train_cfg = _load_json(train_cfg_p)
+    ckpt_dir = _resolve_ckpt_dir(root, global_train_cfg)
     pre_export_onnx = _list_onnx_files(ckpt_dir)
     ckpt_path = _select_checkpoint(ckpt_dir)
     if ckpt_path is None:
         raise FileNotFoundError(f"No .pt checkpoint found under {ckpt_dir}")
     print(f"[setup_api] Using checkpoint for export: {ckpt_path}")
 
-    onnx_path = _export_policy_to_onnx(api_dst, api_cfg, train_cfg, ckpt_path)
+    run_dir = ckpt_path.parent
+    snap_env_p = run_dir / "env_config.json"
+    snap_train_p = run_dir / "train_config.json"
+    snap_model_p = run_dir / "model_config.json"
+    for p in (snap_env_p, snap_train_p, snap_model_p):
+        if not p.exists():
+            raise FileNotFoundError(
+                f"Run dir {run_dir} missing {p.name}; export needs configs snapshotted at training time."
+            )
+
+    env_cfg = _load_json(snap_env_p)
+    train_cfg = _load_json(snap_train_p)
+    model_configs = _load_json(snap_model_p)
+
+    api_dst = copy_api_example_to_root(root)
+    print(f"[setup_api] Recreated {api_dst} from tools/api_example (old removed)")
+
+    api_cfg = update_api_config_from_env_and_train(root, env_cfg, train_cfg, model_configs)
+    print(f"[setup_api] Updated {api_dst / 'config.json'} from snapshots in {run_dir}")
+
+    onnx_path = _export_policy_to_onnx(api_dst, api_cfg, train_cfg, model_configs, ckpt_path)
     print(f"[setup_api] ONNX ready at {onnx_path}")
 
     _clean_new_onnx_in_ckpt_dir(ckpt_dir, pre_export_onnx)

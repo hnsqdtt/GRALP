@@ -3,12 +3,12 @@ from __future__ import annotations
 """Entry point for PPO training using the randomized GPU ray environment (map-free).
 
 Usage:
-    python -m rl_ppo.ppo_train --fresh [--tag NAME]
-    python -m rl_ppo.ppo_train --fresh --resume <path-or-tag> [--tag NAME] [--opt]
-    python -m rl_ppo.ppo_train --resume <path-or-tag>
+    python -m rl_ppo.train --fresh [--tag NAME]
+    python -m rl_ppo.train --fresh --resume <path-or-tag> [--tag NAME] [--opt]
+    python -m rl_ppo.train --resume <path-or-tag>
 
-train_config / env_config are always read from config/ (for --fresh modes) or from
-the target run directory (for pure --resume).
+train_config / env_config / model_config are always read from config/ (for
+--fresh modes) or from the target run directory (for pure --resume).
 """
 
 import os
@@ -21,11 +21,11 @@ from typing import Any, Dict, Optional, Tuple
 
 import torch
 
-from .ppo_models import PPOPolicy
-from .ppo_buffer import RolloutBuffer
+from .buffer import RolloutBuffer
 from .writer import close_writer, get_writer, init_writer
 from env import load_json_config
 from env.sim_gpu_env import SimGPUEnvConfig, SimRandomGPUBatchEnv, infer_obs_dim as _infer_obs_dim_sim
+from models import PPOPolicy, build_encoder, resolve_model_entry
 
 
 DEFAULT_TRAIN_CONFIG = os.path.join("config", "train_config.json")
@@ -37,6 +37,8 @@ def load_train_config(path: Optional[str]) -> Dict[str, Any]:
     cfg = load_json_config(path) if path else {}
     cfg.setdefault("device", "cuda:0")
     cfg.setdefault("env_config", "env_config.json")
+    cfg.setdefault("model_config", "model_config.json")
+    cfg.setdefault("model", "gralp_attn")
     samp = cfg.setdefault("sampling", {})
     samp.setdefault("batch_env", 256)
     samp.setdefault("rollout_len", 128)
@@ -58,9 +60,6 @@ def load_train_config(path: Optional[str]) -> Dict[str, Any]:
     ppo.setdefault("log_std_min", -5.0)
     ppo.setdefault("log_std_max", 2.0)
     ppo.setdefault("collision_done", True)
-    model = cfg.setdefault("model", {})
-    model.setdefault("num_queries", 4)
-    model.setdefault("num_heads", 4)
 
     run = cfg.setdefault("run", {})
     run.setdefault("total_env_steps", 2_000_000)
@@ -86,23 +85,34 @@ def _extract_seed_from_train_or_env(train_cfg: Dict[str, Any], env_cfg: Dict[str
         return None
 
 
-def _resolve_env_cfg_path(train_cfg_path: str, train_cfg: Dict[str, Any]) -> Optional[str]:
-    env_cfg_path = train_cfg.get("env_config", None)
-    if not env_cfg_path:
+def _resolve_sibling_cfg_path(train_cfg_path: str, key: str,
+                              train_cfg: Dict[str, Any]) -> Optional[str]:
+    val = train_cfg.get(key, None)
+    if not val:
         return None
-    if os.path.isabs(env_cfg_path):
-        return env_cfg_path
-    return os.path.join(os.path.dirname(os.path.abspath(train_cfg_path)), env_cfg_path)
+    if os.path.isabs(val):
+        return val
+    return os.path.join(os.path.dirname(os.path.abspath(train_cfg_path)), val)
+
+
+def _resolve_env_cfg_path(train_cfg_path: str, train_cfg: Dict[str, Any]) -> Optional[str]:
+    return _resolve_sibling_cfg_path(train_cfg_path, "env_config", train_cfg)
+
+
+def _resolve_model_cfg_path(train_cfg_path: str, train_cfg: Dict[str, Any]) -> Optional[str]:
+    return _resolve_sibling_cfg_path(train_cfg_path, "model_config", train_cfg)
 
 
 def _setup_fresh_run_dir(runs_root: str, tag: Optional[str],
-                         train_cfg_src: str, env_cfg_src: str) -> str:
+                         train_cfg_src: str, env_cfg_src: str,
+                         model_cfg_src: str) -> str:
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     name = f"{ts}-{tag}" if tag else ts
     run_dir = os.path.join(runs_root, name)
     os.makedirs(run_dir, exist_ok=False)
     shutil.copy2(train_cfg_src, os.path.join(run_dir, "train_config.json"))
     shutil.copy2(env_cfg_src, os.path.join(run_dir, "env_config.json"))
+    shutil.copy2(model_cfg_src, os.path.join(run_dir, "model_config.json"))
     return run_dir
 
 
@@ -221,13 +231,19 @@ def main():
         external_env_cfg_src = _resolve_env_cfg_path(DEFAULT_TRAIN_CONFIG, external_cfg)
         if not external_env_cfg_src or not os.path.isfile(external_env_cfg_src):
             raise FileNotFoundError(f"env_config not found: {external_env_cfg_src}")
+        external_model_cfg_src = _resolve_model_cfg_path(DEFAULT_TRAIN_CONFIG, external_cfg)
+        if not external_model_cfg_src or not os.path.isfile(external_model_cfg_src):
+            raise FileNotFoundError(f"model_config not found: {external_model_cfg_src}")
         runs_root = external_cfg["run"]["ckpt_dir"]
 
         resume_ckpt: Optional[str] = None
         if args.resume:
             _, resume_ckpt = _resolve_resume_target(args.resume, runs_root)
 
-        run_dir = _setup_fresh_run_dir(runs_root, args.tag, DEFAULT_TRAIN_CONFIG, external_env_cfg_src)
+        run_dir = _setup_fresh_run_dir(
+            runs_root, args.tag,
+            DEFAULT_TRAIN_CONFIG, external_env_cfg_src, external_model_cfg_src,
+        )
         if resume_ckpt:
             print(f"[PPO] Fresh run at {run_dir} (warm-starting from {resume_ckpt})")
         else:
@@ -246,12 +262,16 @@ def main():
 
     train_cfg_path = os.path.join(run_dir, "train_config.json")
     env_cfg_path = os.path.join(run_dir, "env_config.json")
+    model_cfg_path = os.path.join(run_dir, "model_config.json")
     if not os.path.isfile(train_cfg_path):
         raise FileNotFoundError(f"Missing train_config.json in {run_dir}")
     if not os.path.isfile(env_cfg_path):
         raise FileNotFoundError(f"Missing env_config.json in {run_dir}")
+    if not os.path.isfile(model_cfg_path):
+        raise FileNotFoundError(f"Missing model_config.json in {run_dir}")
     cfg = load_train_config(train_cfg_path)
     env_cfg = load_json_config(env_cfg_path)
+    model_configs = load_json_config(model_cfg_path)
 
     device = torch.device(
         cfg.get("device", "cuda:0") if (cfg.get("device", "cuda:0") == "cpu" or torch.cuda.is_available()) else "cpu"
@@ -301,15 +321,16 @@ def main():
     vec_dim = int(obs.shape[1]) if obs.dim() == 2 else int(_infer_obs_dim_sim(sim))
     act_dim = 2
 
-    model_cfg = cfg.get("model", {}) or {}
+    model_key = str(cfg.get("model", "gralp_attn"))
+    model_entry = resolve_model_entry(model_configs, model_key)
+    encoder = build_encoder(model_entry, vec_dim=vec_dim)
     policy = PPOPolicy(
-        vec_dim=vec_dim,
+        encoder=encoder,
         action_dim=act_dim,
-        num_queries=int(model_cfg.get("num_queries", 4)),
-        num_heads=int(model_cfg.get("num_heads", 4)),
         log_std_min=float((cfg.get("ppo", {}) or {}).get("log_std_min", -5.0)),
         log_std_max=float((cfg.get("ppo", {}) or {}).get("log_std_max", 2.0)),
     ).to(device)
+    print(f"[PPO] model={model_key!r} ({model_entry.get('name')}) | vec_dim={vec_dim} | feature_dim={encoder.feature_dim}")
     ppo_cfg = cfg.get("ppo", {}) or {}
     opt_pi = torch.optim.Adam([
         {"params": list(policy.encoder.parameters()) + list(policy.mu.parameters()) + [policy.log_std], "lr": float(ppo_cfg.get("lr", 3e-4))},

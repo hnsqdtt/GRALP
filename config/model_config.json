@@ -1,0 +1,9 @@
+{
+    "mlp_2":         {"name": "mlp",          "params": {"depth": 2, "hidden": 256, "feature_dim": 256}},
+    "mlp_3":         {"name": "mlp",          "params": {"depth": 3, "hidden": 256, "feature_dim": 256}},
+    "mlp_4":         {"name": "mlp",          "params": {"depth": 4, "hidden": 256, "feature_dim": 256}},
+    "mlp_5":         {"name": "mlp",          "params": {"depth": 5, "hidden": 256, "feature_dim": 256}},
+    "cnn_zeropad":   {"name": "cnn_zeropad",  "params": {"channels": 32, "kernel": 5, "dilations": [1, 2, 4, 8, 16], "feature_dim": 256, "pose_hidden": 64}},
+    "cnn_circular":  {"name": "cnn_circular", "params": {"channels": 32, "kernel": 5, "dilations": [1, 2, 4, 8, 16], "feature_dim": 256, "pose_hidden": 64}},
+    "gralp_attn":    {"name": "gralp_attn",   "params": {"hidden": 64, "d_model": 128, "num_queries": 4, "num_heads": 4, "learnable_queries": true, "feature_dim": 256}}
+}
