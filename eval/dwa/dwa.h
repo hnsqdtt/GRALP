@@ -102,6 +102,35 @@ DWA_API int dwa_plan(
     DWAOutput *out);
 
 
+/* Batch version: process n_envs independent envs sharing the same cfg.
+ *
+ * All per-env inputs are flat arrays of length n_envs (or n_envs * n_rays for
+ * ray_dists). ray_angles is shared across envs and may be NULL.
+ *
+ * Outputs are written into the four flat arrays of length n_envs. The same
+ * scratch buffer is reused across envs (no per-env state), so scratch_n only
+ * needs to hold one env's working set: at least 4*n_rays + 4*v_samples*omega_samples.
+ *
+ * Returns 0 on success, -1 on bad inputs.
+ */
+DWA_API int dwa_plan_batch(
+    const DWAConfig *cfg,
+    int n_envs,
+    int n_rays,
+    const double *vx_cur,
+    const double *omega_cur,
+    const double *target_x_local,
+    const double *target_y_local,
+    const double *ray_dists,
+    const double *ray_angles,
+    double *scratch,
+    int scratch_n,
+    double *vx_out,
+    double *omega_out,
+    double *score_out,
+    int *found_out);
+
+
 #ifdef __cplusplus
 }
 #endif

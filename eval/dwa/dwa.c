@@ -319,3 +319,45 @@ DWA_API int dwa_plan(const DWAConfig *cfg,
     out->found = 1;
     return 0;
 }
+
+
+DWA_API int dwa_plan_batch(const DWAConfig *cfg,
+                           int n_envs,
+                           int n_rays,
+                           const double *vx_cur,
+                           const double *omega_cur,
+                           const double *target_x_local,
+                           const double *target_y_local,
+                           const double *ray_dists,
+                           const double *ray_angles,
+                           double *scratch,
+                           int scratch_n,
+                           double *vx_out,
+                           double *omega_out,
+                           double *score_out,
+                           int *found_out)
+{
+    if (cfg == NULL || vx_cur == NULL || omega_cur == NULL
+        || target_x_local == NULL || target_y_local == NULL
+        || ray_dists == NULL || scratch == NULL
+        || vx_out == NULL || omega_out == NULL
+        || score_out == NULL || found_out == NULL) return -1;
+    if (n_envs <= 0 || n_rays < 0) return -1;
+
+    for (int b = 0; b < n_envs; b++) {
+        const double *rd = ray_dists + (size_t)b * (size_t)n_rays;
+        DWAOutput one;
+        int rc = dwa_plan(cfg,
+                          vx_cur[b], omega_cur[b],
+                          target_x_local[b], target_y_local[b],
+                          rd, ray_angles, n_rays,
+                          scratch, scratch_n,
+                          &one);
+        if (rc != 0) return rc;
+        vx_out[b]    = one.vx_cmd;
+        omega_out[b] = one.omega_cmd;
+        score_out[b] = one.score;
+        found_out[b] = one.found;
+    }
+    return 0;
+}

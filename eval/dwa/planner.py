@@ -88,6 +88,25 @@ def _load() -> ctypes.CDLL:
         ctypes.POINTER(_DWAOutputC),
     ]
     lib.dwa_plan.restype = ctypes.c_int
+
+    lib.dwa_plan_batch.argtypes = [
+        ctypes.POINTER(_DWAConfigC),
+        ctypes.c_int, ctypes.c_int,
+        ctypes.POINTER(ctypes.c_double),  # vx_cur [B]
+        ctypes.POINTER(ctypes.c_double),  # omega_cur [B]
+        ctypes.POINTER(ctypes.c_double),  # target_x_local [B]
+        ctypes.POINTER(ctypes.c_double),  # target_y_local [B]
+        ctypes.POINTER(ctypes.c_double),  # ray_dists [B*N]
+        ctypes.POINTER(ctypes.c_double),  # ray_angles [N] or NULL
+        ctypes.POINTER(ctypes.c_double),  # scratch
+        ctypes.c_int,                     # scratch_n
+        ctypes.POINTER(ctypes.c_double),  # vx_out [B]
+        ctypes.POINTER(ctypes.c_double),  # omega_out [B]
+        ctypes.POINTER(ctypes.c_double),  # score_out [B]
+        ctypes.POINTER(ctypes.c_int),     # found_out [B]
+    ]
+    lib.dwa_plan_batch.restype = ctypes.c_int
+
     _lib = lib
     return lib
 
@@ -241,3 +260,63 @@ class DWAPlanner:
         if rc != 0:
             raise RuntimeError(f"dwa_plan returned {rc} (bad inputs or scratch too small)")
         return float(out.vx_cmd), float(out.omega_cmd), float(out.score), bool(out.found)
+
+    def plan_batch(self,
+                   vx_cur: np.ndarray,
+                   omega_cur: np.ndarray,
+                   target_x_local: np.ndarray,
+                   target_y_local: np.ndarray,
+                   ray_dists_m: np.ndarray,
+                   ray_angles: Optional[np.ndarray] = None
+                   ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Plan one DWA step for ``B`` independent envs in a single C call.
+
+        ``ray_dists_m`` is ``[B, N]``; the four scalar inputs are length-B
+        arrays. Returns four arrays of length B: ``(vx, omega, score, found)``.
+        """
+        vx = np.ascontiguousarray(vx_cur, dtype=np.float64)
+        wc = np.ascontiguousarray(omega_cur, dtype=np.float64)
+        tx = np.ascontiguousarray(target_x_local, dtype=np.float64)
+        ty = np.ascontiguousarray(target_y_local, dtype=np.float64)
+        rd = np.ascontiguousarray(ray_dists_m, dtype=np.float64)
+        if rd.ndim != 2:
+            raise ValueError(f"ray_dists_m must be 2-D [B,N], got shape {rd.shape}")
+        B, N = rd.shape
+        for arr, name in ((vx, "vx_cur"), (wc, "omega_cur"), (tx, "target_x_local"), (ty, "target_y_local")):
+            if arr.shape != (B,):
+                raise ValueError(f"{name} must be shape ({B},), got {arr.shape}")
+
+        if ray_angles is not None:
+            ra = np.ascontiguousarray(ray_angles, dtype=np.float64)
+            if ra.shape != (N,):
+                raise ValueError(f"ray_angles must be shape ({N},), got {ra.shape}")
+            ra_ptr = ra.ctypes.data_as(ctypes.POINTER(ctypes.c_double))
+        else:
+            ra_ptr = ctypes.POINTER(ctypes.c_double)()
+
+        scratch = self._ensure_scratch(N)
+        vx_out = np.empty(B, dtype=np.float64)
+        w_out = np.empty(B, dtype=np.float64)
+        score_out = np.empty(B, dtype=np.float64)
+        found_out = np.empty(B, dtype=np.int32)
+
+        rc = self._lib.dwa_plan_batch(
+            ctypes.byref(self._cfg_c),
+            ctypes.c_int(int(B)),
+            ctypes.c_int(int(N)),
+            vx.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            wc.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            tx.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            ty.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            rd.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            ra_ptr,
+            scratch.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            ctypes.c_int(int(scratch.size)),
+            vx_out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            w_out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            score_out.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+            found_out.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
+        )
+        if rc != 0:
+            raise RuntimeError(f"dwa_plan_batch returned {rc}")
+        return vx_out, w_out, score_out, found_out.astype(bool)
