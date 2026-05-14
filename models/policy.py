@@ -84,6 +84,16 @@ class PPOPolicy(nn.Module):
         a_scaled, logp, std = _squash(mu, log_std, eps, limits)
         return PPOActOut(action=a_scaled, logp=logp, mu=mu, std=std)
 
+    @torch.no_grad()
+    def act_deterministic(self, obs_vec: torch.Tensor, limits: torch.Tensor) -> torch.Tensor:
+        """Return ``tanh(mu) * limits`` with no exploration noise.
+
+        Use this for evaluation rollouts so reported rewards reflect the
+        learned policy's expected behavior rather than a sample of it.
+        """
+        mu, _, _ = self._core(obs_vec)
+        return torch.tanh(mu) * limits
+
     def evaluate_actions(self, obs_vec: torch.Tensor, actions_scaled: torch.Tensor, limits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Return (logp, entropy, value) for given actions.
 

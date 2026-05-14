@@ -62,7 +62,8 @@ def build_sim_cfg(env_cfg: Dict[str, Any], n_envs: int, device: str) -> SimGPUEn
 
 @dataclass
 class EvalEnvSpec:
-    env_cfg_path: str
+    env_cfg_path: Optional[str] = None
+    env_cfg: Optional[Dict[str, Any]] = None  # parsed dict; takes precedence over env_cfg_path
     n_envs: int = 24
     seed: int = 0
     device: Optional[str] = None  # None -> auto (cuda if available, else cpu)
@@ -73,7 +74,12 @@ class EvalEnv:
 
     def __init__(self, spec: EvalEnvSpec) -> None:
         self.spec = spec
-        self.env_cfg = load_json_config(spec.env_cfg_path)
+        if spec.env_cfg is not None:
+            self.env_cfg = dict(spec.env_cfg)
+        elif spec.env_cfg_path:
+            self.env_cfg = load_json_config(spec.env_cfg_path)
+        else:
+            raise ValueError("EvalEnvSpec needs either env_cfg or env_cfg_path")
 
         device = spec.device
         if device is None:
