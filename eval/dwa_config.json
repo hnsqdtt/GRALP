@@ -5,9 +5,9 @@
   "alpha_heading": 0.8,
   "beta_clearance": 0.1,
   "gamma_velocity": 1.0,
-  "robot_radius_m": 0.1,
+  "robot_radius_m": 0.02,
   "rotate_away_mode": true,
-  "v_brake_acc": 0.5,
-  "omega_brake_acc": 1.0,
+  "v_brake_acc": 2.0,
+  "omega_brake_acc": 4.0,
   "predict_steps": 20
 }

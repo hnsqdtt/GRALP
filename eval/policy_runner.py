@@ -56,32 +56,34 @@ def run_policy(env: EvalEnv,
     if progress_factory is not None:
         iterator = progress_factory(iterator, total=n_rollouts, desc="rollouts")
 
+    device = env.device
     for r in iterator:
         obs = env.reset()
-        sum_reward = 0.0
-        sum_collide = 0.0
-        sum_success = 0.0
+        sum_reward = torch.zeros((), device=device, dtype=torch.float32)
+        sum_collide = torch.zeros((), device=device, dtype=torch.float32)
+        sum_success = torch.zeros((), device=device, dtype=torch.float32)
         for _ in range(rollout_len):
             if deterministic:
                 action = policy.act_deterministic(obs, limits_b)
             else:
                 action = policy.act(obs, limits_b).action
             obs, reward, _term, info = env.step(action)
-            sum_reward += float(reward.sum().item())
-            sum_collide += float(info["collided"].to(torch.float32).sum().item())
-            sum_success += float(info["success"].to(torch.float32).sum().item())
+            sum_reward += reward.sum()
+            sum_collide += info["collided"].to(torch.float32).sum()
+            sum_success += info["success"].to(torch.float32).sum()
             n_env_steps += B
 
         denom = float(rollout_len * B)
-        per_roll_reward.append(sum_reward / denom)
-        per_roll_collide.append(sum_collide / denom)
-        per_roll_success.append(sum_success / denom)
+        roll_r = float(sum_reward.item()) / denom
+        roll_c = float(sum_collide.item()) / denom
+        roll_s = float(sum_success.item()) / denom
+        per_roll_reward.append(roll_r)
+        per_roll_collide.append(roll_c)
+        per_roll_success.append(roll_s)
 
         if verbose and progress_factory is None:
             print(f"  rollout {r+1:2d}/{n_rollouts}: "
-                  f"reward={per_roll_reward[-1]:+.4f}  "
-                  f"collide={per_roll_collide[-1]:.4f}  "
-                  f"success={per_roll_success[-1]:.4f}")
+                  f"reward={roll_r:+.4f}  collide={roll_c:.4f}  success={roll_s:.4f}")
 
     elapsed = time.perf_counter() - t_start
 

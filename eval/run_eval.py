@@ -121,13 +121,13 @@ def _build_env_from_cfg(env_cfg: Dict[str, Any], args: argparse.Namespace) -> Ev
     return env
 
 
-def _build_dwa_planner(env_cfg: Dict[str, Any]) -> DWAPlanner:
+def _build_dwa_planner(env_cfg: Dict[str, Any], device: torch.device) -> DWAPlanner:
     dwa_cfg_dict = _load_json(DEFAULT_DWA_CFG)
     dwa_cfg = DWAConfig.from_configs(env_cfg, dwa_cfg_dict)
     print(f"[eval] DWA  | v=[{dwa_cfg.v_min},{dwa_cfg.v_max}]  omega=+/-{dwa_cfg.omega_max}  "
           f"alpha/beta/gamma={dwa_cfg.alpha_heading}/{dwa_cfg.beta_clearance}/{dwa_cfg.gamma_velocity}  "
           f"grid={dwa_cfg.v_samples}x{dwa_cfg.omega_samples}")
-    return DWAPlanner(dwa_cfg)
+    return DWAPlanner(dwa_cfg, device=device)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +138,7 @@ def _build_dwa_planner(env_cfg: Dict[str, Any]) -> DWAPlanner:
 def cmd_dwa_only(args: argparse.Namespace) -> int:
     env_cfg = _load_json(args.env_config)
     env = _build_env_from_cfg(env_cfg, args)
-    planner = _build_dwa_planner(env_cfg)
+    planner = _build_dwa_planner(env_cfg, env.device)
 
     print()
     print(f"[eval] Running DWA: {args.n_rollouts} rollouts x {args.rollout_len} steps x {args.n_envs} envs")
@@ -169,7 +169,7 @@ def cmd_single_ckpt(args: argparse.Namespace, ckpt: Path) -> int:
     step = load_policy_weights(policy, ckpt, env.device)
     print(f"[eval] Pol  | vec_dim={vec_dim}  feature_dim={policy.encoder.feature_dim}  step={step:,}")
 
-    planner = _build_dwa_planner(env_cfg)
+    planner = _build_dwa_planner(env_cfg, env.device)
     progress = _progress_factory()
 
     print()
@@ -232,7 +232,7 @@ def cmd_run_dir(args: argparse.Namespace) -> int:
     policy = build_policy_for_eval(train_cfg, model_configs, model_key, vec_dim, env.device)
     print(f"[eval] Pol  | vec_dim={vec_dim}  feature_dim={policy.encoder.feature_dim}")
 
-    planner = _build_dwa_planner(env_cfg)
+    planner = _build_dwa_planner(env_cfg, env.device)
     progress = _progress_factory()
 
     print()

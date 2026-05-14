@@ -15,9 +15,8 @@ checkpoint see the same random ray traces. This wrapper:
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
-import numpy as np
 import torch
 
 from env import load_json_config
@@ -109,15 +108,13 @@ class EvalEnv:
     def get_limits(self) -> torch.Tensor:
         return self.env.get_limits()
 
-    # ---- DWA-facing snapshot ------------------------------------------
+    # ---- DWA-facing GPU snapshot --------------------------------------
 
-    def snapshot_for_dwa(self) -> Dict[str, np.ndarray]:
-        """Return the numpy float64 inputs DWA needs in a single sync.
+    def snapshot_for_dwa(self) -> Dict[str, torch.Tensor]:
+        """Return the device tensors DWA needs. Zero GPU->CPU sync.
 
-        Computes the target offset in the robot frame on GPU first (one fused
-        rotation), then copies a small batch of tensors over PCIe in one go.
         Keys: ``rays_m`` [B, N], ``target_x_local`` [B], ``target_y_local`` [B],
-        ``vx_cur`` [B], ``omega_cur`` [B].
+        ``vx_cur`` [B], ``omega_cur`` [B] — all float32 on ``self.device``.
         """
         env = self.env
         pos = env.pos_xy
@@ -129,22 +126,10 @@ class EvalEnv:
         s = torch.sin(yaw)
         tx_local = c * dx + s * dy
         ty_local = -s * dx + c * dy
-
-        rays_cpu = env._rays_m.detach().to("cpu", non_blocking=False).numpy().astype(np.float64, copy=False)
-        tx_cpu = tx_local.detach().to("cpu", non_blocking=False).numpy().astype(np.float64, copy=False)
-        ty_cpu = ty_local.detach().to("cpu", non_blocking=False).numpy().astype(np.float64, copy=False)
-        vx_cpu = env.prev_cmd[:, 0].detach().to("cpu", non_blocking=False).numpy().astype(np.float64, copy=False)
-        wc_cpu = env.prev_cmd[:, 2].detach().to("cpu", non_blocking=False).numpy().astype(np.float64, copy=False)
         return {
-            "rays_m": rays_cpu,
-            "target_x_local": tx_cpu,
-            "target_y_local": ty_cpu,
-            "vx_cur": vx_cpu,
-            "omega_cur": wc_cpu,
+            "rays_m": env._rays_m,
+            "target_x_local": tx_local,
+            "target_y_local": ty_local,
+            "vx_cur": env.prev_cmd[:, 0],
+            "omega_cur": env.prev_cmd[:, 2],
         }
-
-    def action_to_device(self, vx: np.ndarray, omega: np.ndarray) -> torch.Tensor:
-        """Pack ``(vx, omega)`` numpy arrays into a ``[B,2]`` tensor on env.device."""
-        act_np = np.stack([vx.astype(np.float32, copy=False),
-                           omega.astype(np.float32, copy=False)], axis=-1)
-        return torch.from_numpy(act_np).to(self.device, non_blocking=True)
