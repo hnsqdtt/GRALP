@@ -220,64 +220,112 @@ class DWAPlanner:
         in_dyn = in_vd & in_wd
 
         # ------------------------------------------------------------------
-        # 3) Forward simulate every (env, candidate) closed-form for all S
-        # sub-steps at once, then compute distance to obstacles as a single
-        # 4-D tensor reduction. This replaces a Python loop of S small GPU
-        # kernels with a few large ones, removing launch-latency overhead.
+        # 3) Closed-form arc-to-collision per (env, candidate, obstacle).
+        # Each candidate trajectory is either a straight line (omega = 0) or a
+        # circular arc (omega != 0), both parameterized in the robot frame
+        # with yaw 0 at t=0. For each obstacle point P we solve analytically
+        # for the arc length at which the robot center first enters a
+        # robot_radius circle around P. Total tensor: [B, NC, N] obstacles
+        # (vs the old [B, NC, S, N] sample tensor -- 20x smaller).
         # ------------------------------------------------------------------
         v_b = v_cand.unsqueeze(0).expand(B, NC)               # [B, NC]
         w_b = w_cand.unsqueeze(0).expand(B, NC)
-        steps = int(cfg.predict_steps)
-        dt_sim = cfg.predict_time / float(steps)
-        r_safe2 = cfg.robot_radius_m * cfg.robot_radius_m
+        T_pred = float(cfg.predict_time)
+        rr = float(cfg.robot_radius_m)
+        rr2 = rr * rr
+        eps_w = 1e-6
+        BIG = float(cfg.dist_clip_m) * 10.0
 
-        t_seq = torch.arange(1, steps + 1, device=device, dtype=dtype) * dt_sim  # [S]
-        wt = w_b.unsqueeze(-1) * t_seq.view(1, 1, -1)         # [B, NC, S]
-        eps_w = 1e-9
-        # Safe division: replace |w|<eps with 1.0 to avoid NaN; we pick the
-        # straight-line branch for those positions via torch.where below.
-        w_safe = torch.where(w_b.abs() < eps_w, torch.ones_like(w_b), w_b)
-        r_arc = (v_b / w_safe).unsqueeze(-1)                  # [B, NC, 1]
-        is_circ = (w_b.abs() >= eps_w).unsqueeze(-1)          # [B, NC, 1]
+        # Broadcast to [B, NC, N]
+        v_e = v_b.unsqueeze(-1)                               # [B, NC, 1]
+        w_e = w_b.unsqueeze(-1)                               # [B, NC, 1]
+        ox = cx.unsqueeze(1)                                  # [B, 1, N]
+        oy = cy.unsqueeze(1)                                  # [B, 1, N]
 
-        # Robot starts at (0,0,0) in its own frame each step.
-        x_circ = r_arc * torch.sin(wt)
-        y_circ = r_arc * (1.0 - torch.cos(wt))
-        x_line = v_b.unsqueeze(-1) * t_seq.view(1, 1, -1)
-        x_sub = torch.where(is_circ, x_circ, x_line)          # [B, NC, S]
-        y_sub = torch.where(is_circ, y_circ, torch.zeros_like(x_line))
-        th_sub = wt                                            # [B, NC, S]
+        # --- Straight-line branch ------------------------------------------
+        # D^2(s) = (s*sign(v) - ox)^2 + oy^2, parameterized by arc s = |v|*t.
+        # First hit at s = |ox| - sqrt(rr^2 - oy^2), valid when oy^2 < rr^2
+        # AND sign(ox) == sign(v) (obstacle ahead in the direction of motion).
+        # arc_line is set to BIG when the formula doesn't apply.
+        max_arc_line = v_e.abs() * T_pred                     # [B, NC, 1]
+        delta_line = rr2 - oy * oy                            # [B, 1, N]
+        # Same-sign mask: obstacle in front of motion direction. v_e == 0
+        # gives same_sign=False so robot-at-rest never collides.
+        same_sign = (v_e * ox) > 0                            # [B, NC, N]
+        valid_line = (delta_line > 0.0) & same_sign
+        sqrt_delta = delta_line.clamp_min(0.0).sqrt()
+        arc_line = ox.abs() - sqrt_delta                      # [B, NC, N]
+        arc_line = arc_line.clamp(min=0.0)
+        arc_line = torch.where(valid_line, arc_line, torch.full_like(arc_line, BIG))
 
-        # Point-to-point distance squared on the hot 4-D tensor:
-        #   [B, NC, S, N] = (px - cx_e)^2 + (py - cy_e)^2
-        # This is the memory-bound bottleneck of plan_batch (a single ~166 MB
-        # tensor at the default grid size); keeping it to two squared diffs +
-        # one amin is what makes it survive on a laptop GPU.
-        cx_e = cx.view(B, 1, 1, N)
-        cy_e = cy.view(B, 1, 1, N)
-        px = x_sub.unsqueeze(-1)                              # [B, NC, S, 1]
-        py = y_sub.unsqueeze(-1)
-        d2 = (px - cx_e).square() + (py - cy_e).square()      # [B, NC, S, N]
-        min_d2_per_step = d2.amin(dim=-1)                     # [B, NC, S]
+        # --- Circular-arc branch -------------------------------------------
+        # C = (0, r) where r = v/omega; R = |r|. Robot starts at (0,0) at
+        # angle theta_0 = atan2(-r, 0). At angle (theta_0 + omega*t) the robot
+        # is at distance R from C; the closest obstacle approach is when the
+        # arc passes through the point Q on the circle nearest to P.
+        w_safe = torch.where(w_e.abs() >= eps_w, w_e, torch.ones_like(w_e))
+        r_signed = v_e / w_safe                               # [B, NC, 1]
+        R = r_signed.abs()                                    # [B, NC, 1]
+        # |CP|^2 = ox^2 + (oy - r)^2
+        dCP2 = ox * ox + (oy - r_signed).square()             # [B, NC, N]
+        dCP = dCP2.sqrt()
+        # min distance from circle to P = ||CP| - R|; collision if < rr.
+        min_dist_circle = (dCP - R).abs()
+        approaches = min_dist_circle < rr                     # [B, NC, N]
+        # Triangle: R, dCP, rr; the chord at distance rr from P subtends an
+        # angular half-width acos((R^2 + dCP^2 - rr^2) / (2 R dCP)) about Q.
+        denom_circ = (2.0 * R * dCP).clamp_min(1e-12)
+        cos_half = ((R * R + dCP2 - rr2) / denom_circ).clamp(-1.0, 1.0)
+        half_angle = torch.acos(cos_half)                     # [B, NC, N]
+        # theta_Q (angle of closest point Q around C): atan2(oy - r, ox).
+        theta_Q = torch.atan2(oy - r_signed, ox)              # [B, NC, N]
+        # theta_0 (robot's start angle around C): atan2(-r, 0) ; sign of -r.
+        theta_0 = torch.atan2(-r_signed, torch.zeros_like(r_signed))  # [B, NC, 1]
+        # Swept angle in direction of omega; map to [0, 2pi).
+        sign_w = torch.sign(w_e)
+        swept_to_Q = ((theta_Q - theta_0) * sign_w).remainder(2.0 * math.pi)
+        # First-hit swept angle (before reaching Q).
+        swept_first = swept_to_Q - half_angle                 # [B, NC, N]
+        swept_total = w_e.abs() * T_pred                      # [B, NC, 1]
+        in_horizon = (swept_first >= 0.0) & (swept_first <= swept_total)
+        arc_circ = R * swept_first.clamp(min=0.0)             # [B, NC, N]
+        valid_circ = approaches & in_horizon
+        arc_circ = torch.where(valid_circ, arc_circ, torch.full_like(arc_circ, BIG))
 
-        # First sub-step at which the trajectory enters the safety circle. If
-        # none, dist falls back to dist_clip_m. We do this with a single amin:
-        # at non-collision steps put dist_clip, at collision steps put arc len.
-        arc_per_step = v_b.abs().unsqueeze(-1) * t_seq.view(1, 1, -1)  # [B, NC, S]
-        collide_step = min_d2_per_step <= r_safe2
-        arc_or_clip = torch.where(
-            collide_step, arc_per_step,
-            torch.tensor(cfg.dist_clip_m, device=device, dtype=dtype),
-        )
-        dist = arc_or_clip.amin(dim=-1)                       # [B, NC]
+        # --- Combine line / circle branches by |omega| threshold -----------
+        use_line = (w_e.abs() < eps_w).expand_as(arc_line)
+        arc_per_obs = torch.where(use_line, arc_line, arc_circ)  # [B, NC, N]
+
+        # First (smallest) arc length where the trajectory collides with any
+        # obstacle; BIG when nothing is hit within the predict horizon.
+        arc_first = arc_per_obs.amin(dim=-1)                  # [B, NC]
+        # Clamp to predict horizon distance; cap by dist_clip_m on no-hit so
+        # admissibility / normalization stays consistent with the prior
+        # sample-based version.
+        max_arc_traj = v_b.abs() * T_pred
+        dist = torch.minimum(arc_first, max_arc_traj)
+        dist_clip_t = torch.tensor(cfg.dist_clip_m, device=device, dtype=dtype)
+        # arc_first >= max_arc => no collision in horizon => use dist_clip.
+        no_hit = arc_first >= max_arc_traj
+        dist = torch.where(no_hit, dist_clip_t.expand_as(dist), dist)
 
         # ------------------------------------------------------------------
         # 4) Score components (raw, then per-env normalized to [0,1]).
         # ------------------------------------------------------------------
-        x_end = x_sub[..., -1]
-        y_end = y_sub[..., -1]
-        th_end = th_sub[..., -1]
-        target_dir = torch.atan2(ty.unsqueeze(-1) - y_end, tx.unsqueeze(-1) - x_end)  # [B, NC]
+        # End-of-horizon pose (robot frame), needed for the heading term.
+        # Reuse closed-form positions evaluated at t = T_pred.
+        wT = w_b * T_pred                                     # [B, NC]
+        w_safe_2d = torch.where(w_b.abs() >= eps_w, w_b, torch.ones_like(w_b))
+        r_2d = v_b / w_safe_2d                                # [B, NC]
+        is_circ_2d = w_b.abs() >= eps_w
+        x_end_circ = r_2d * torch.sin(wT)
+        y_end_circ = r_2d * (1.0 - torch.cos(wT))
+        x_end_line = v_b * T_pred
+        x_end = torch.where(is_circ_2d, x_end_circ, x_end_line)
+        y_end = torch.where(is_circ_2d, y_end_circ, torch.zeros_like(x_end_line))
+        th_end = wT                                            # [B, NC]
+
+        target_dir = torch.atan2(ty.unsqueeze(-1) - y_end, tx.unsqueeze(-1) - x_end)
         diff = target_dir - th_end
         diff = (diff + math.pi).remainder(2.0 * math.pi) - math.pi
         heading_raw = math.pi - diff.abs()                    # [B, NC]; max = pi
