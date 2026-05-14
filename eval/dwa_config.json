@@ -1,0 +1,13 @@
+{
+  "predict_time": 1.0,
+  "v_samples": 21,
+  "omega_samples": 41,
+  "alpha_heading": 0.8,
+  "beta_clearance": 0.1,
+  "gamma_velocity": 1.0,
+  "robot_radius_m": 0.1,
+  "rotate_away_mode": true,
+  "v_brake_acc": 0.5,
+  "omega_brake_acc": 1.0,
+  "predict_steps": 20
+}
