@@ -300,6 +300,7 @@ def main():
         safe_distance_m=safe_dist,
         vx_max=float(lim_cfg.get("vx_max", 1.5)),
         omega_max=float(lim_cfg.get("omega_max", 2.0)),
+        vx_forward_only=bool(lim_cfg.get("vx_forward_only", False)),
         w_collision=float(rew_cfg.get("reward_collision", 1.0)),
         w_progress=float(rew_cfg.get("reward_progress", 0.01)),
         orientation_verify=bool(rew_cfg.get("orientation_verify", False)),
@@ -369,8 +370,8 @@ def main():
     gamma = float(ppo_cfg.get("gamma", 0.99))
     lam = float(ppo_cfg.get("gae_lambda", 0.95))
 
-    limits = env.get_limits()
-    limits_b = limits.view(1, -1).expand(B_env, -1)
+    limits = env.get_limits()              # [A, 2] action bounds (lo, hi)
+    limits_b = limits.unsqueeze(0).expand(B_env, -1, -1)
 
     init_writer(
         logdir=cfg["run"]["ckpt_dir"],

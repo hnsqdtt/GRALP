@@ -32,6 +32,7 @@ class SimGPUEnvConfig:
     safe_distance_m: float = 0.75
     vx_max: float = 1.5
     omega_max: float = 2.0
+    vx_forward_only: bool = False
     w_collision: float = 1.0
     w_progress: float = 0.01
     orientation_verify: bool = False
@@ -77,6 +78,18 @@ class SimRandomGPUBatchEnv:
                 f"SimGPUEnvConfig velocity limits must be positive; "
                 f"got vx_max={cfg.vx_max}, omega_max={cfg.omega_max}"
             )
+        # Per-axis action bounds (lo, hi). vx is forward-only iff cfg.vx_forward_only.
+        vx_lo = 0.0 if bool(cfg.vx_forward_only) else -float(cfg.vx_max)
+        self._action_bounds = torch.tensor(
+            [[vx_lo, float(cfg.vx_max)],
+             [-float(cfg.omega_max), float(cfg.omega_max)]],
+            device=self.device, dtype=torch.float32,
+        )
+        # Per-axis center/half cached for obs normalization and step clamp.
+        self._vx_lo = float(vx_lo)
+        self._vx_hi = float(cfg.vx_max)
+        self._vx_center = 0.5 * (self._vx_lo + self._vx_hi)
+        self._vx_half = 0.5 * (self._vx_hi - self._vx_lo)
         if cfg.task_point_max_dist_m < cfg.task_point_success_radius_m:
             raise ValueError(
                 "SimGPUEnvConfig.task_point_max_dist_m must be >= task_point_success_radius_m; "
@@ -122,7 +135,14 @@ class SimRandomGPUBatchEnv:
         self._sample_new_global_task_points(mask=torch.ones((B,), dtype=torch.bool, device=self.device))
 
     def get_limits(self) -> torch.Tensor:
-        return torch.tensor([self.cfg.vx_max, self.cfg.omega_max], device=self.device, dtype=torch.float32)
+        """Per-axis action bounds (lo, hi), shape [A, 2].
+
+        Symmetric mode: [[-vx_max, +vx_max], [-omega_max, +omega_max]].
+        Forward-only mode (cfg.vx_forward_only=True): [[0, +vx_max], [-omega_max, +omega_max]].
+        Consumers feed this directly into policy._squash / act* as the action
+        bounds; physical scalars (vx_max, omega_max) should be read from cfg.
+        """
+        return self._action_bounds
 
     @torch.no_grad()
     def reset(self) -> torch.Tensor:
@@ -167,7 +187,7 @@ class SimRandomGPUBatchEnv:
         om_max = float(self.cfg.omega_max)
         dt = float(self.cfg.dt)
         interval_max = getattr(self, "_task_redraw_interval_max", 0)
-        vx_cmd = action[:, 0].clamp(-vx_max, vx_max)
+        vx_cmd = action[:, 0].clamp(self._vx_lo, self._vx_hi)
         if action.shape[1] == 2:
             vy_cmd = torch.zeros_like(vx_cmd)
             om_cmd = action[:, 1].clamp(-om_max, om_max)
@@ -448,38 +468,33 @@ class SimRandomGPUBatchEnv:
 
     @torch.no_grad()
     def _build_obs(self, rays_m: torch.Tensor, ref_feat: torch.Tensor) -> torch.Tensor:
-        """Construct the observation vector following the agreed layout."""
-        if self.n_rays <= 0:
-            vx_lim = float(self.cfg.vx_max)
-            om_lim = float(self.cfg.omega_max)
-            prev_vx_n = self.prev_cmd[:, 0] / vx_lim
-            prev_om_n = self.prev_cmd[:, 2] / om_lim
-            prev_cmd_n = torch.stack([prev_vx_n, prev_om_n], dim=-1)
-            dvx_n = (self.prev_cmd[:, 0] - self.prev_prev_cmd[:, 0]) / (2.0 * vx_lim)
-            dom_n = (self.prev_cmd[:, 2] - self.prev_prev_cmd[:, 2]) / (2.0 * om_lim)
-            dprev_all_n = torch.stack([dvx_n, dom_n], dim=-1)
-            dist = torch.hypot(
-                self._local_task_xy[:, 0] - self.pos_xy[:, 0],
-                self._local_task_xy[:, 1] - self.pos_xy[:, 1],
-            )
-            dist_n = (dist / self.view_radius_m).clamp(0.0, 1.0).unsqueeze(-1)
-            return torch.cat([ref_feat, prev_cmd_n, dprev_all_n, dist_n], dim=-1).to(torch.float32)
-        Rm = self.view_radius_m
-        rays_n = (rays_m / Rm).clamp(0.0, 1.0)
-        vx_lim = float(self.cfg.vx_max)
+        """Construct the observation vector following the agreed layout.
+
+        prev_vx is centered/scaled so that the network always sees a zero-centered
+        signal: symmetric (vx_forward_only=False) reduces to ``prev/vx_max`` (bit-exact
+        with the legacy form); forward-only maps [0, vx_max] -> [-1, 1].
+        """
+        vx_center = self._vx_center
+        vx_half = max(self._vx_half, 1e-9)
         om_lim = float(self.cfg.omega_max)
-        prev_vx_n = self.prev_cmd[:, 0] / vx_lim
+        prev_vx_n = (self.prev_cmd[:, 0] - vx_center) / vx_half
         prev_om_n = self.prev_cmd[:, 2] / om_lim
         prev_cmd_n = torch.stack([prev_vx_n, prev_om_n], dim=-1)
-        dvx_n = (self.prev_cmd[:, 0] - self.prev_prev_cmd[:, 0]) / (2.0 * vx_lim)
+        dvx_n = (self.prev_cmd[:, 0] - self.prev_prev_cmd[:, 0]) / (2.0 * vx_half)
         dom_n = (self.prev_cmd[:, 2] - self.prev_prev_cmd[:, 2]) / (2.0 * om_lim)
         dprev_all_n = torch.stack([dvx_n, dom_n], dim=-1)
         dist = torch.hypot(
             self._local_task_xy[:, 0] - self.pos_xy[:, 0],
             self._local_task_xy[:, 1] - self.pos_xy[:, 1],
         )
-        dist_n = (dist / Rm).clamp(0.0, 1.0).unsqueeze(-1)
+        Rm = self.view_radius_m
 
+        if self.n_rays <= 0:
+            dist_n = (dist / Rm).clamp(0.0, 1.0).unsqueeze(-1)
+            return torch.cat([ref_feat, prev_cmd_n, dprev_all_n, dist_n], dim=-1).to(torch.float32)
+
+        rays_n = (rays_m / Rm).clamp(0.0, 1.0)
+        dist_n = (dist / Rm).clamp(0.0, 1.0).unsqueeze(-1)
         parts = [rays_n, ref_feat, prev_cmd_n, dprev_all_n, dist_n]
         return torch.cat(parts, dim=-1).to(torch.float32)
 
