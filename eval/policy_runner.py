@@ -8,8 +8,9 @@ post-process reward inside the runner — that's the GPU env's contract and
 keeps DWA vs PPO comparisons honest (both go through the exact same
 SimRandomGPUBatchEnv reward pipeline).
 
-Actions are deterministic by default (``tanh(mu) * limits``) so the reported
-mean reflects the policy's expected behavior rather than a stochastic sample.
+Actions are deterministic by default (``center + tanh(mu) * scale`` with the
+per-axis (lo, hi) bounds from ``env.get_limits()``) so the reported mean
+reflects the policy's expected behavior rather than a stochastic sample.
 Pass ``deterministic=False`` to recover sampling behavior.
 """
 
@@ -42,8 +43,8 @@ def run_policy(env: EvalEnv,
     """
     policy.eval()
     B = env.B
-    limits = env.get_limits()
-    limits_b = limits.view(1, -1).expand(B, -1)
+    limits = env.get_limits()              # [A, 2] action bounds (lo, hi)
+    limits_b = limits.unsqueeze(0).expand(B, -1, -1)
 
     per_roll_reward: List[float] = []
     per_roll_collide: List[float] = []

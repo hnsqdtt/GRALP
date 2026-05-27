@@ -39,6 +39,7 @@ def build_sim_cfg(env_cfg: Dict[str, Any], n_envs: int, device: str) -> SimGPUEn
         safe_distance_m=safe_dist,
         vx_max=float(lim_c.get("vx_max", 1.5)),
         omega_max=float(lim_c.get("omega_max", 2.0)),
+        vx_forward_only=bool(lim_c.get("vx_forward_only", False)),
         w_collision=float(rew_c.get("reward_collision", 1.0)),
         w_progress=float(rew_c.get("reward_progress", 0.01)),
         orientation_verify=bool(rew_c.get("orientation_verify", False)),

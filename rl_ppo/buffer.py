@@ -20,7 +20,7 @@ class RolloutBatch:
 
     values: torch.Tensor      # [N, 1]
 
-    limits: torch.Tensor      # [N, act_dim]
+    limits: torch.Tensor      # [N, act_dim, 2] action bounds (lo, hi)
 
 
 
@@ -44,7 +44,7 @@ class RolloutBuffer:
         self.rewards = torch.zeros((N, 1), device=device, dtype=torch.float32)
         self.dones = torch.zeros((N, 1), device=device, dtype=torch.float32)
         self.values = torch.zeros((N, 1), device=device, dtype=torch.float32)
-        self.limits = torch.zeros((N, act_dim), device=device, dtype=torch.float32)
+        self.limits = torch.zeros((N, act_dim, 2), device=device, dtype=torch.float32)
         self._ptr = 0
 
     def add(self, *, obs: torch.Tensor, act: torch.Tensor, logp: torch.Tensor, rew: torch.Tensor,
