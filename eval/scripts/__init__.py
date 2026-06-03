@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-"""DWA evaluation scripts.
+"""DWA / narrow-channel evaluation scripts.
 
 Run from the repo root as modules, e.g.::
 
-    python -m eval.scripts.dwa_runner
-    python -m eval.scripts.dwa_grid_sweep
+    python -m eval.scripts.dwa_train_env_reward
+    python -m eval.scripts.narrow_channel_eval
 
-These reuse the DWA library in ``eval/dwa`` and the env in ``env/``; only
-``eval_env``, ``dwa_runner`` and ``dwa_grid_sweep`` live here.
+These reuse the DWA library in ``eval/dwa`` and the env in ``env/``.
 """

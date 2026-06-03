@@ -28,19 +28,18 @@ does NOT change the env's own collision rule.
 Why not batch = 2048 (training's batch_env)?
 --------------------------------------------
 DWA's ``plan_batch`` allocates several ``[B, NC, 3*N]`` tensors
-(NC = v_samples * omega_samples). Training runs B=2048 with a cheap *policy*
-forward; DWA at B=2048 with the 21x41 grid would need tens of GB and OOM. The
-per-step reward is a batch-size-independent expectation, so we use a smaller,
-DWA-feasible batch and more rollouts -- statistically identical to training's
-env, just split differently. Raise ``--n-envs`` only as far as VRAM allows.
+(NC = v_samples * omega_samples = 9*17 = 153) -- far heavier per env than the
+cheap *policy* forward that training's B=2048 is sized for. The per-step reward
+is a batch-size-independent expectation, so we use a smaller, DWA-feasible batch
+and more rollouts -- statistically identical to training's env, just split
+differently. Raise ``--n-envs`` only as far as VRAM allows.
 
 Output:
     ``runs/dwa_train_env_reward/<timestamp>/result.json``
 
 Usage:
     python -m eval.scripts.dwa_train_env_reward
-    python -m eval.scripts.dwa_train_env_reward --rr 0.002 0.005
-    python -m eval.scripts.dwa_train_env_reward --rr 0.005 --n-envs 64 --n-rollouts 20
+    python -m eval.scripts.dwa_train_env_reward --n-envs 64 --n-rollouts 20
 """
 
 import argparse
@@ -49,7 +48,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import torch
 
@@ -65,9 +64,8 @@ DEFAULT_TRAIN_CFG = REPO / "config" / "train_config.json"
 DEFAULT_DWA_CFG = REPO / "eval" / "dwa_config.json"
 DEFAULT_OUT_DIR = REPO / "runs" / "dwa_train_env_reward"
 
-# Robot radii (m) to evaluate. Default brackets the chosen baseline rr=0.005
-# (eval/dwa_config.json) with a smaller, more aggressive point.
-DEFAULT_RR: List[float] = [0.002, 0.005]
+# Robot radius (m) to evaluate. Baseline rr=0.005 from eval/dwa_config.json.
+DEFAULT_RR: float = 0.005
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -88,9 +86,8 @@ def _parse_cli() -> argparse.Namespace:
     p.add_argument("--train-config", type=Path, default=DEFAULT_TRAIN_CFG,
                    help="Used only to inherit sampling.rollout_len (the training value).")
     p.add_argument("--dwa-config", type=Path, default=DEFAULT_DWA_CFG)
-    p.add_argument("--rr", type=float, nargs="+", default=None,
-                   help=f"One or more robot_radius_m values to evaluate. "
-                        f"Default: {DEFAULT_RR}")
+    p.add_argument("--rr", type=float, default=None,
+                   help=f"robot_radius_m to evaluate (default: {DEFAULT_RR}).")
     # DWA objective-weight overrides (default: inherit from --dwa-config).
     # These change the PLANNER's behavior (unlike the env's reward weights).
     p.add_argument("--alpha", type=float, default=None,
@@ -102,10 +99,11 @@ def _parse_cli() -> argparse.Namespace:
                    help="Override DWA gamma_velocity: lower it to make DWA "
                         "less speed-greedy.")
     p.add_argument("--n-envs", type=int, default=256,
-                   help="DWA-feasible batch. NOT training's 2048 (DWA would OOM); "
-                        "per-step reward is batch-independent, so use more rollouts. "
-                        "Footprint ~15.5 MB/env with the 21x41 grid (256 ~ 4 GB, "
-                        "512 ~ 8 GB); lower it if you share the GPU.")
+                   help="DWA-feasible batch (NOT training's 2048; DWA's plan_batch "
+                        "is far heavier per env). Per-step reward is batch-"
+                        "independent, so use more rollouts. Footprint ~2.75 MB/env "
+                        "with the 9x17 grid (256 ~ 0.7 GB, 512 ~ 1.4 GB); lower it "
+                        "if you share the GPU.")
     p.add_argument("--rollout-len", type=int, default=None,
                    help="Default: sampling.rollout_len from --train-config.")
     p.add_argument("--n-rollouts", type=int, default=10)
@@ -129,9 +127,9 @@ def main() -> int:
             print(f"{label} not found: {path}", file=sys.stderr)
             return 2
 
-    rr_list = list(args.rr) if args.rr else list(DEFAULT_RR)
-    if any(rr <= 0.0 for rr in rr_list):
-        print(f"all --rr values must be > 0 (got {rr_list})", file=sys.stderr)
+    rr = float(args.rr) if args.rr is not None else DEFAULT_RR
+    if rr <= 0.0:
+        print(f"--rr must be > 0 (got {rr})", file=sys.stderr)
         return 2
 
     env_cfg = _load_json(args.env_config)
@@ -143,8 +141,7 @@ def main() -> int:
                       else sampling.get("rollout_len", 256))
 
     base_cfg = DWAConfig.from_configs(env_cfg, dwa_cfg)
-    # Apply objective-weight overrides onto base_cfg so every rr iteration's
-    # DWAConfig(**base_cfg.__dict__) copy inherits them.
+    # Apply objective-weight overrides so the DWAConfig copy below inherits them.
     if args.alpha is not None:
         base_cfg.alpha_heading = float(args.alpha)
     if args.beta is not None:
@@ -158,70 +155,66 @@ def main() -> int:
           f"v=[{base_cfg.v_min},{base_cfg.v_max}]  omega=+/-{base_cfg.omega_max}  "
           f"grid={base_cfg.v_samples}x{base_cfg.omega_samples}  "
           f"alpha/beta/gamma={base_cfg.alpha_heading}/{base_cfg.beta_clearance}/{base_cfg.gamma_velocity}")
-    print(f"rr sweep:   {rr_list}  (eval/dwa_config.json default = {base_cfg.robot_radius_m})")
+    print(f"rr:         {rr}  (eval/dwa_config.json default = {base_cfg.robot_radius_m})")
     print(f"Eval:       {args.n_rollouts} rollouts x {rollout_len} steps x {args.n_envs} envs "
-          f"per rr (seed={args.seed})")
+          f"(seed={args.seed})")
     print()
 
-    rows: List[Dict[str, Any]] = []
-    for i, rr in enumerate(rr_list, start=1):
-        # Override only robot_radius_m; everything else inherits from base_cfg.
-        cfg = DWAConfig(**base_cfg.__dict__)
-        cfg.robot_radius_m = float(rr)
+    # Override only robot_radius_m; everything else inherits from base_cfg.
+    cfg = DWAConfig(**base_cfg.__dict__)
+    cfg.robot_radius_m = rr
 
-        # Fresh env + reseed per rr so each rr sees the same env trajectory.
-        _reseed(args.seed)
-        env = EvalEnv(EvalEnvSpec(
-            env_cfg=env_cfg,
-            n_envs=args.n_envs,
-            seed=args.seed,
-            device=args.device,
-        ))
-        planner = DWAPlanner(cfg, device=env.device)
-        planner.reset_stats()
+    _reseed(args.seed)
+    env = EvalEnv(EvalEnvSpec(
+        env_cfg=env_cfg,
+        n_envs=args.n_envs,
+        seed=args.seed,
+        device=args.device,
+    ))
+    planner = DWAPlanner(cfg, device=env.device)
+    planner.reset_stats()
 
-        print(f"[{i}/{len(rr_list)}] rr={rr:.4f} m")
-        t0 = time.perf_counter()
-        res = run_dwa(env, planner,
-                      rollout_len=rollout_len,
-                      n_rollouts=args.n_rollouts,
-                      verbose=not args.quiet)
-        stats = planner.get_stats()
-        elapsed = time.perf_counter() - t0
-        print(f"   reward={res['reward_mean']:+.4f} +/- {res['reward_std']:.4f}  "
-              f"collide={res['collision_mean']:.4f}  "
-              f"success={res['success_mean']:.4f}  "
-              f"fallback={stats['fallback_rate']:.4f}  "
-              f"({elapsed:.1f}s)")
+    print(f"rr={rr:.4f} m")
+    t0 = time.perf_counter()
+    res = run_dwa(env, planner,
+                  rollout_len=rollout_len,
+                  n_rollouts=args.n_rollouts,
+                  verbose=not args.quiet)
+    stats = planner.get_stats()
+    elapsed = time.perf_counter() - t0
+    print(f"   reward={res['reward_mean']:+.4f} +/- {res['reward_std']:.4f}  "
+          f"collide={res['collision_mean']:.4f}  "
+          f"success={res['success_mean']:.4f}  "
+          f"fallback={stats['fallback_rate']:.4f}  "
+          f"({elapsed:.1f}s)")
 
-        rows.append({
-            "rr": float(rr),
-            "reward_mean": res["reward_mean"],
-            "reward_std": res["reward_std"],
-            "collision_mean": res["collision_mean"],
-            "collision_std": res["collision_std"],
-            "success_mean": res["success_mean"],
-            "success_std": res["success_std"],
-            "fallback_rate": stats["fallback_rate"],
-            "fallback_envsteps": stats["fallback_envsteps"],
-            "total_envsteps": stats["total_envsteps"],
-            "elapsed_sec": res["elapsed_sec"],
-            "fps": res["fps"],
-            "n_env_steps": res["n_env_steps"],
-        })
+    result: Dict[str, Any] = {
+        "rr": rr,
+        "reward_mean": res["reward_mean"],
+        "reward_std": res["reward_std"],
+        "collision_mean": res["collision_mean"],
+        "collision_std": res["collision_std"],
+        "success_mean": res["success_mean"],
+        "success_std": res["success_std"],
+        "fallback_rate": stats["fallback_rate"],
+        "fallback_envsteps": stats["fallback_envsteps"],
+        "total_envsteps": stats["total_envsteps"],
+        "elapsed_sec": res["elapsed_sec"],
+        "fps": res["fps"],
+        "n_env_steps": res["n_env_steps"],
+    }
 
     # Pretty stdout summary.
     bar = "=" * 78
     print()
     print(bar)
     print(f" DWA reward in training env | seed={args.seed}, "
-          f"{args.n_rollouts}x{rollout_len}x{args.n_envs} env-steps/rr")
+          f"{args.n_rollouts}x{rollout_len}x{args.n_envs} env-steps")
     print(bar)
     print(f"{'rr (m)':>9}  {'reward':>9}  {'collide':>8}  {'success':>8}  {'fallback':>9}")
-    for r in rows:
-        print(f"{r['rr']:>9.4f}  {r['reward_mean']:+8.4f}  "
-              f"{r['collision_mean']:8.4f}  {r['success_mean']:8.4f}  "
-              f"{r['fallback_rate']:9.4f}")
+    print(f"{result['rr']:>9.4f}  {result['reward_mean']:+8.4f}  "
+          f"{result['collision_mean']:8.4f}  {result['success_mean']:8.4f}  "
+          f"{result['fallback_rate']:9.4f}")
     print(bar)
 
     if args.no_save:
@@ -247,7 +240,7 @@ def main() -> int:
             "beta_clearance": base_cfg.beta_clearance,
             "gamma_velocity": base_cfg.gamma_velocity,
         },
-        "rr": rows,
+        "result": result,
     }
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
