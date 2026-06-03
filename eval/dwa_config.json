@@ -1,7 +1,7 @@
 {
   "predict_time": 1.0,
-  "v_samples": 21,
-  "omega_samples": 41,
+  "v_samples": 9,
+  "omega_samples": 17,
   "alpha_heading": 0.2,
   "beta_clearance": 1.0,
   "gamma_velocity": 0.5,
