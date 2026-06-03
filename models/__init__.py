@@ -6,7 +6,7 @@ from .encoders import (
     CNNCircularEncoder,
     CNNZeroPadEncoder,
     EncoderBase,
-    GRALPAttnEncoder,
+    CircularAttnEncoder,
     MLPEncoder,
 )
 from .policy import PPOActOut, PPOPolicy
@@ -15,7 +15,7 @@ ENCODER_REGISTRY: Dict[str, type] = {
     "mlp": MLPEncoder,
     "cnn_zeropad": CNNZeroPadEncoder,
     "cnn_circular": CNNCircularEncoder,
-    "gralp_attn": GRALPAttnEncoder,
+    "circular_attn": CircularAttnEncoder,
 }
 
 
@@ -59,7 +59,7 @@ __all__ = [
     "MLPEncoder",
     "CNNZeroPadEncoder",
     "CNNCircularEncoder",
-    "GRALPAttnEncoder",
+    "CircularAttnEncoder",
     "PPOPolicy",
     "PPOActOut",
     "ENCODER_REGISTRY",

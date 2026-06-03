@@ -2,7 +2,7 @@
     "device":  "cuda:0",
     "env_config":  "env_config.json",
     "model_config":  "model_config.json",
-    "model":  "gralp_attn",
+    "model":  "circular_attn",
     "sampling":  {
                      "batch_env":  2048,
                      "rollout_len":  256,

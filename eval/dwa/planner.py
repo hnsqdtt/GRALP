@@ -24,7 +24,7 @@ Algorithm follows the paper:
 
 import math
 from dataclasses import dataclass
-from typing import Any, Mapping, Tuple, Union
+from typing import Any, Dict, Mapping, Tuple, Union
 
 import torch
 
@@ -138,6 +138,33 @@ class DWAPlanner:
         self._sin_a: torch.Tensor = torch.empty(0, device=self.device, dtype=dtype)
         self._half_tile: float = 0.0  # 0.5 * (2pi / N) once N is known
 
+        # Cumulative diagnostic counter, in env-steps.
+        #   fallback : admissible set empty -> rotate_away / stand-still triggered
+        #              (hard failure -- DWA cannot pick any candidate).
+        # Stays on GPU; sync to host only via get_stats().
+        self._fallback_envsteps: torch.Tensor = torch.zeros((), device=self.device, dtype=torch.int64)
+        self._total_envsteps: torch.Tensor = torch.zeros((), device=self.device, dtype=torch.int64)
+
+    # ------------------------------------------------------------------
+    # Fallback-rate stats. ``reset_stats`` before a rollout, ``get_stats``
+    # after to read the cumulative rate. The single .item() inside get_stats
+    # is the only host sync introduced by these counters.
+    # ------------------------------------------------------------------
+
+    def reset_stats(self) -> None:
+        self._fallback_envsteps.zero_()
+        self._total_envsteps.zero_()
+
+    def get_stats(self) -> Dict[str, float]:
+        n_fb = int(self._fallback_envsteps.item())
+        n_total = int(self._total_envsteps.item())
+        denom = float(n_total) if n_total > 0 else 1.0
+        return {
+            "fallback_envsteps": n_fb,
+            "total_envsteps": n_total,
+            "fallback_rate": n_fb / denom,
+        }
+
     # ------------------------------------------------------------------
     # Lazily cache the per-ray angle table once we know N.
     # ------------------------------------------------------------------
@@ -186,23 +213,33 @@ class DWAPlanner:
         self._ensure_ray_tables(N)
 
         # ------------------------------------------------------------------
-        # 1) Obstacle point set: each ray endpoint becomes one obstacle point.
-        # Rays that hit the patch boundary (free space) get shifted to a far
-        # "phantom" location so they never trigger a collision -- this lets us
-        # drop a torch.where on the hot 4-D distance tensor below.
-        # The paper-style line-segment representation only matters when the
-        # tile width (ray_dist * 2*pi/N) is comparable to robot_radius; at our
-        # N=105 / patch=10m / robot_radius=0.1m the tile is ~0.06m and a single
-        # point is dense enough.
+        # 1) Obstacle LINE FIELD (Fox/Burgard/Thrun 1997, sec 5.2): each sensor
+        # reading is a short line segment PERPENDICULAR to the beam at the
+        # measured range, with length = beam breadth (range * dtheta).  Each
+        # segment is represented by 3 points -- its centre and two endpoints --
+        # so the inflated segments TILE the angular bins with no inter-ray gap.
+        # (A single centre point per ray leaves blind spots between adjacent
+        # rays that the robot body can clip, which over-collides unless the
+        # footprint is grossly over-inflated.)  The obstacle axis becomes 3*N.
+        # Rays at the patch boundary (free space) are shifted to a far "phantom"
+        # location so they never trigger a collision.
         # ------------------------------------------------------------------
         cos_a = self._cos_a            # [N]
         sin_a = self._sin_a            # [N]
-        cx = rays_m * cos_a            # [B, N] obstacle point x (robot frame)
-        cy = rays_m * sin_a            # [B, N]
+        half = self._half_tile         # 0.5 * (2*pi / N) = half beam width (rad)
+        cx0 = rays_m * cos_a           # [B, N] segment centre (robot frame)
+        cy0 = rays_m * sin_a
+        off = rays_m * half            # [B, N] half beam-breadth = perp offset
+        # perpendicular to beam i is (-sin_a, cos_a); +/- segment endpoints
+        cx_p = cx0 - off * sin_a; cy_p = cy0 + off * cos_a
+        cx_m = cx0 + off * sin_a; cy_m = cy0 - off * cos_a
+        cx = torch.cat([cx0, cx_p, cx_m], dim=1)   # [B, 3N]
+        cy = torch.cat([cy0, cy_p, cy_m], dim=1)
         far = 10.0 * cfg.dist_clip_m
-        invalid_ray = (rays_m <= 0.0) | (rays_m >= cfg.dist_clip_m)
-        cx = torch.where(invalid_ray, torch.full_like(cx, far), cx)
-        cy = torch.where(invalid_ray, torch.full_like(cy, far), cy)
+        invalid_ray = (rays_m <= 0.0) | (rays_m >= cfg.dist_clip_m)  # [B, N]
+        invalid = invalid_ray.repeat(1, 3)         # [B, 3N], blocks share ray order
+        cx = torch.where(invalid, torch.full_like(cx, far), cx)
+        cy = torch.where(invalid, torch.full_like(cy, far), cy)
 
         # ------------------------------------------------------------------
         # 2) Dynamic-window mask V_d (per env, [B, NC]).
@@ -361,6 +398,11 @@ class DWAPlanner:
         chosen_w = w_b.gather(1, best_idx.unsqueeze(-1)).squeeze(-1)
 
         no_admissible = ~admissible.any(dim=-1)
+
+        # Cumulative fallback stats: stays on GPU.
+        self._fallback_envsteps += no_admissible.sum().to(torch.int64)
+        self._total_envsteps += B
+
         if cfg.rotate_away_mode:
             # Turn toward the half-plane the goal is in; stand still otherwise.
             target_angle = torch.atan2(ty, tx)

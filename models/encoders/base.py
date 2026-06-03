@@ -66,13 +66,23 @@ class RayPoseCNN1D(EncoderBase):
     configured padding mode, then global-mean-pools across the ray axis. The
     pose branch is a small MLP. Both are concatenated and projected to
     ``feature_dim`` (the contract consumed by ``PPOPolicy``).
+
+    ``ray_pos_encoding``: when True, appends a constant ``[0, 1/(N-1), ..., 1]``
+    channel alongside the ray distances before ``expand``. This breaks the ring
+    symmetry that ``circular_pad + mean pool`` otherwise imposes (the ray branch
+    of a pure circular CNN is bit-exactly invariant to circular shifts of the
+    input). ray[0] is the robot-front bin and gets pos=0, so the model can tell
+    "in front" from "behind" without losing the equivariance benefit of the
+    convolution itself. Default False keeps the previous 1-channel architecture,
+    so existing checkpoints load with ``strict=True``.
     """
 
     PADDING_MODE = "circular"
 
     def __init__(self, vec_dim: int, *, feature_dim: int = 256, channels: int = 32,
                  kernel: int = 5, dilations: tuple = (1, 2, 4, 8, 16),
-                 pose_dim: int = 7, pose_hidden: int = 64) -> None:
+                 pose_dim: int = 7, pose_hidden: int = 64,
+                 ray_pos_encoding: bool = False) -> None:
         super().__init__(vec_dim, feature_dim=feature_dim)
         self.pose_dim = int(pose_dim)
         self.N = self.vec_dim - self.pose_dim
@@ -80,7 +90,12 @@ class RayPoseCNN1D(EncoderBase):
             raise ValueError(
                 f"vec_dim={vec_dim} too small for pose_dim={pose_dim} (need vec_dim > pose_dim)"
             )
-        self.expand = nn.Conv1d(1, int(channels), kernel_size=1)
+        self.ray_pos_encoding = bool(ray_pos_encoding)
+        in_ch = 2 if self.ray_pos_encoding else 1
+        self.expand = nn.Conv1d(in_ch, int(channels), kernel_size=1)
+        if self.ray_pos_encoding:
+            pos = torch.arange(self.N, dtype=torch.float32) / max(self.N - 1, 1)
+            self.register_buffer("_pos_emb", pos.view(1, 1, self.N), persistent=False)
         self.blocks = nn.Sequential(*[
             DilatedConv1DBlock(int(channels), kernel=int(kernel), dilation=int(d),
                                padding_mode=self.PADDING_MODE)
@@ -97,6 +112,8 @@ class RayPoseCNN1D(EncoderBase):
 
     def forward(self, vec: torch.Tensor) -> torch.Tensor:
         rays = vec[:, :self.N].unsqueeze(1)
+        if self.ray_pos_encoding:
+            rays = torch.cat([rays, self._pos_emb.expand(rays.size(0), -1, -1)], dim=1)
         pose = vec[:, self.N:self.N + self.pose_dim]
         ray_feat = self.blocks(self.expand(rays)).mean(dim=-1)
         pose_feat = self.pose_mlp(pose)

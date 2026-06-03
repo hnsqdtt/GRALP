@@ -66,7 +66,7 @@ class _RayBranch(nn.Module):
         return x
 
 
-class GRALPAttnEncoder(EncoderBase):
+class CircularAttnEncoder(EncoderBase):
     """Ray encoder with circular dilated conv + multi-query, multi-head attention.
 
     Splits ``vec`` into ``[B, N]`` ray distances and ``[B, pose_dim]`` pose
@@ -83,7 +83,8 @@ class GRALPAttnEncoder(EncoderBase):
 
     def __init__(self, vec_dim: int, *, feature_dim: int = 256, hidden: int = 64,
                  d_model: int = 128, num_queries: int = 4, num_heads: int = 4,
-                 learnable_queries: bool = True, pose_dim: int = 7) -> None:
+                 learnable_queries: bool = True, pose_dim: int = 7,
+                 ray_pos_encoding: bool = False) -> None:
         super().__init__(vec_dim, feature_dim=feature_dim)
         self.num_queries = int(num_queries)
         self.num_heads = int(num_heads)
@@ -92,13 +93,20 @@ class GRALPAttnEncoder(EncoderBase):
         if self.vec_dim < self.pose_dim:
             raise ValueError(f"vec_dim must be >= pose_dim ({self.pose_dim}), got {vec_dim}")
         self.N = max(0, self.vec_dim - self.pose_dim)
-        self.ray_in_ch = 1
+        # When True, ``_pos_emb`` is concatenated as a second input channel to
+        # break the ring symmetry of circular_pad + permutation-invariant attn.
+        # See ``RayPoseCNN1D`` for the same flag and rationale.
+        self.ray_pos_encoding = bool(ray_pos_encoding)
+        self.ray_in_ch = 2 if self.ray_pos_encoding else 1
         self.hidden = int(hidden)
         self.d_model = int(d_model)
         if self.d_model % max(1, self.num_heads) != 0:
             raise ValueError("d_model must be divisible by num_heads")
 
         self.br_obs = _RayBranch(in_ch=self.ray_in_ch, hidden=self.hidden)
+        if self.ray_pos_encoding and self.N > 0:
+            pos = torch.arange(self.N, dtype=torch.float32) / max(self.N - 1, 1)
+            self.register_buffer("_pos_emb", pos.view(1, 1, self.N), persistent=False)
         self.to_k = nn.Conv1d(self.hidden, self.d_model, kernel_size=1)
         self.to_v = nn.Conv1d(self.hidden, self.d_model, kernel_size=1)
         self.pose_mlp = nn.Sequential(
@@ -126,7 +134,13 @@ class GRALPAttnEncoder(EncoderBase):
 
     def forward(self, vec: torch.Tensor) -> torch.Tensor:
         d_obs, pose = self._split(vec)
-        Fmap = self.br_obs(d_obs)
+        if self.ray_pos_encoding:
+            ray_in = torch.cat(
+                [d_obs.unsqueeze(1), self._pos_emb.expand(d_obs.size(0), -1, -1)], dim=1
+            )
+        else:
+            ray_in = d_obs  # _RayBranch unsqueezes a 2-D input to [B, 1, N]
+        Fmap = self.br_obs(ray_in)
         K = self.to_k(Fmap).transpose(1, 2)
         V = self.to_v(Fmap).transpose(1, 2)
 
