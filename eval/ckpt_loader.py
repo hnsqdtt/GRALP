@@ -57,7 +57,7 @@ def resolve_ckpt_configs(ckpt_path: Path, *,
         train_cfg = _load_json(train_p)
         env_cfg = _load_json(env_p)
         model_configs = _load_json(model_p)
-        snapshot_key = str(train_cfg.get("model", "gralp_attn"))
+        snapshot_key = str(train_cfg.get("model", "circular_attn"))
         if model_override and model_override != snapshot_key:
             print(f"[eval] WARNING: --model {model_override!r} overrides snapshot "
                   f"value {snapshot_key!r}; weight load may fail if architectures differ")

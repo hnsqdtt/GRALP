@@ -38,7 +38,7 @@ def load_train_config(path: Optional[str]) -> Dict[str, Any]:
     cfg.setdefault("device", "cuda:0")
     cfg.setdefault("env_config", "env_config.json")
     cfg.setdefault("model_config", "model_config.json")
-    cfg.setdefault("model", "gralp_attn")
+    cfg.setdefault("model", "circular_attn")
     samp = cfg.setdefault("sampling", {})
     samp.setdefault("batch_env", 256)
     samp.setdefault("rollout_len", 128)
@@ -322,7 +322,7 @@ def main():
     vec_dim = int(obs.shape[1]) if obs.dim() == 2 else int(_infer_obs_dim_sim(sim))
     act_dim = 2
 
-    model_key = str(cfg.get("model", "gralp_attn"))
+    model_key = str(cfg.get("model", "circular_attn"))
     model_entry = resolve_model_entry(model_configs, model_key)
     encoder = build_encoder(model_entry, vec_dim=vec_dim)
     policy = PPOPolicy(
