@@ -3,8 +3,8 @@ from __future__ import annotations
 """Run DWA on EvalEnv for N rollouts and aggregate metrics.
 
 Usage as a script (DWA-only baseline):
-    python -m eval.dwa_runner
-    python -m eval.dwa_runner --rollout-len 256 --n-rollouts 10 --n-envs 24 --seed 0
+    python -m eval.scripts.dwa_runner
+    python -m eval.scripts.dwa_runner --rollout-len 256 --n-rollouts 10 --n-envs 24 --seed 0
 
 Importable: ``run_dwa(eval_env, planner, rollout_len, n_rollouts) -> dict``.
 All ops stay on the env's device (no CPU<->GPU sync inside the inner loop).
@@ -21,10 +21,11 @@ from typing import Any, Dict, List
 import torch
 
 from eval.dwa.planner import DWAConfig, DWAPlanner
-from eval.eval_env import EvalEnv, EvalEnvSpec
+
+from .eval_env import EvalEnv, EvalEnvSpec
 
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_CFG = REPO / "config" / "env_config.json"
 DEFAULT_DWA_CFG = REPO / "eval" / "dwa_config.json"
 
