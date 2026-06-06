@@ -1,0 +1,37 @@
+{
+  "model": "cnn_zeropad",
+  "encoder": {
+    "name": "cnn_zeropad",
+    "params": {
+      "channels": 32,
+      "kernel": 5,
+      "dilations": [
+        1,
+        2,
+        4,
+        8,
+        16
+      ],
+      "feature_dim": 256,
+      "pose_hidden": 64
+    }
+  },
+  "action_dim": 2,
+  "log_std_min": -1.5,
+  "log_std_max": 2.0,
+  "obs": {
+    "patch_meters": 10.0,
+    "ray_max_gap": 0.6,
+    "rays": 105,
+    "pose_dim": 7,
+    "obs_dim": 112
+  },
+  "limits": {
+    "vx_max": 0.6,
+    "omega_max": 1.5,
+    "vx_forward_only": true
+  },
+  "dt": 0.1,
+  "source": "latest.pt",
+  "step": 65011712
+}
